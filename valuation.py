@@ -108,8 +108,9 @@ class Valuer:
 
 
 def find_deals(items, valuer, cfg):
-    """items: dict key -> listing. Returns every in-stock listing that both sources could value,
-    best first; the ones that clear the thresholds have deal=True."""
+    """items: dict key -> listing. Returns every listing that both sources could value, best first.
+    profitable = clears the thresholds at the listed price; deal = profitable AND buyable now.
+    Profitable-but-sold-out listings feed the fast restock watch."""
     # attach TCGplayer matches; in-stock listings first so the lookup budget goes where it matters
     ordered = sorted(items.values(), key=lambda i: not i["in_stock"])
     for it in ordered:
@@ -124,7 +125,7 @@ def find_deals(items, valuer, cfg):
     deals = []
     for it in items.values():
         m = it.get("tcg")
-        if not (it["in_stock"] and m and it["price"] and m.get("market")):
+        if not (m and it["price"] and m.get("market")):
             continue
         market, lowest = m["market"], m.get("lowest")
         # stale or thin market price: live listings must be near the sales price
@@ -139,7 +140,9 @@ def find_deals(items, valuer, cfg):
         net = value * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"]
         profit = net - it["price"] - cfg["buy_shipping_rand"]
         roi = profit / (it["price"] + cfg["buy_shipping_rand"])
-        deals.append({"deal": profit >= cfg["min_profit_rand"] and roi >= cfg["min_roi"],"key": it["key"], "store": it["store"], "title": it["title"], "url": it["url"],
+        profitable = profit >= cfg["min_profit_rand"] and roi >= cfg["min_roi"]
+        deals.append({"deal": profitable and it["in_stock"], "profitable": profitable,
+                      "in_stock": it["in_stock"], "key": it["key"], "store": it["store"], "title": it["title"], "url": it["url"],
                           "price": it["price"], "us_zar": round(us_zar), "sa_median": round(sa_med),
                           "sa_n": len(others), "value": round(value), "profit": round(profit),
                           "roi": round(roi, 3), "tcg_name": m["name"], "tcg_url": m["url"]})

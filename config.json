@@ -72,7 +72,12 @@
     "funko",
     "switch",
     "pop!",
-    "video game"
+    "video game",
+    "blind box",
+    "figure blind",
+    "wheel spin",
+    "rip n ship",
+    "mystery spin"
   ],
   "stores": [
     {
@@ -159,6 +164,56 @@
       "name": "Kitsune Relics",
       "type": "woo",
       "url": "https://www.kitsunerelics.co.za"
+    },
+    {
+      "name": "Big Bang Shop",
+      "type": "shopify",
+      "url": "https://bigbangshop.co.za/collections/pokemon-trading-card-game"
+    },
+    {
+      "name": "WZRD TCG",
+      "type": "shopify",
+      "url": "https://wzrd.co.za"
+    },
+    {
+      "name": "Mithril Vault",
+      "type": "shopify",
+      "url": "https://mithrilvault.co.za"
+    },
+    {
+      "name": "Pops Toys",
+      "type": "shopify",
+      "url": "https://popstoys.co.za"
+    },
+    {
+      "name": "Knightly Gaming",
+      "type": "shopify",
+      "url": "https://www.knightlygaming.co.za"
+    },
+    {
+      "name": "Sword and Board",
+      "type": "shopify",
+      "url": "https://swordandboard.co.za"
+    },
+    {
+      "name": "Marvellous Hobbies",
+      "type": "woo",
+      "url": "https://marvelloushobbies.com"
+    },
+    {
+      "name": "BT Games",
+      "type": "woo",
+      "url": "https://btgames.co.za"
+    },
+    {
+      "name": "Grade It",
+      "type": "woo",
+      "url": "https://www.gradeit.co.za"
+    },
+    {
+      "name": "Fantasy Gaming",
+      "type": "woo",
+      "url": "https://fantasygaming.co.za"
     }
   ],
   "resale": {
@@ -182,6 +237,7 @@
     "new_listings": true,
     "restocks": true,
     "price_drop_pct": 10,
-    "heartbeat_hours": 3
+    "heartbeat_hours": 3,
+    "max_watch": 40
   }
 }

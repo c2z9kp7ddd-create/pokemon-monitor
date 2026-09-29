@@ -51,9 +51,10 @@ def has_any(text, words):
     t = " " + text.lower() + " "
     return any(w.lower() in t for w in words)
 
-def is_tcg(title):
+def is_tcg(title, context=""):
+    """context: store metadata (Shopify vendor/product type) that can say 'Pokemon' when the title doesn't."""
     t = norm(title)
-    return (has_any(t, ["pokemon"]) and has_any(t, CONFIG["tcg_words"])
+    return (has_any(t + " " + norm(context), ["pokemon"]) and has_any(t, CONFIG["tcg_words"])
             and not has_any(t, CONFIG["exclude_words"])
             and not SINGLE_CARD.search(t))
 
@@ -101,7 +102,7 @@ def _scan_shopify(store, base, max_pages):
         d = get_json(f"{base}/products.json?limit=250&page={page}")
         prods = d.get("products", [])
         for p in prods:
-            if not is_tcg(p["title"]):
+            if not is_tcg(p["title"], f'{p.get("vendor", "")} {p.get("product_type", "")}'):
                 continue
             vs = p.get("variants") or [{}]
             out.append(item(store, p["id"], p["title"], f"{base}/products/{p['handle']}",
@@ -216,35 +217,99 @@ def fmt(it):
     return f"{it['title']}\n{it['store']} | {price} | {stock}"
 
 def deal_msg(d):
-    return (f"{d['title']}\nBuy: R{d['price']:,.0f} at {d['store']}\n"
-            f"Resale estimate: R{d['value']:,.0f} (US sales R{d['us_zar']:,.0f}, "
-            f"SA median R{d['sa_median']:,.0f} across {d['sa_n']} stores)\n"
-            f"Est. profit R{d['profit']:,.0f} ({d['roi']:.0%}) after fees and postage")
+    """Short: cost, resale, profit. Details stay on the dashboard."""
+    return (f"{d['title']}\n"
+            f"Cost R{d['price']:,.0f} | Resell ~R{d['value']:,.0f} | Profit ~R{d['profit']:,.0f} ({d['roi']:.0%})")
 
 def send_deals(deals, state):
     """Alert once per deal; again only if the price drops 5%+ or it sold out and came back."""
     sent = state.setdefault("alerted", {})
     live = {d["key"] for d in deals if d["deal"]}
-    local_only = set(CONFIG.get("local_only_stores", []))
     for d in deals:
         # the Mac copy alerts only for stores the cloud can't reach, so nothing arrives twice
-        if not d["deal"] or (not IS_CLOUD and d["store"] not in local_only):
+        if not d["deal"] or not mine(d["store"]):
             continue
         prev = sent.get(d["key"])
         if prev and prev["active"] and d["price"] > prev["price"] * 0.95:
             continue
-        notify(f"Profit R{d['profit']:,.0f}: {d['store']}", deal_msg(d), priority=5, click=d["url"])
+        notify(f"BUY NOW: {d['store']}", deal_msg(d), priority=5, click=d["url"])
         state["last_msg"] = time.time()
-        sent[d["key"]] = {"price": d["price"], "active": True, "at": d.get("at")}
+        sent[d["key"]] = {"price": d["price"], "active": True}
     for k, v in sent.items():
         if k not in live:
             v["active"] = False
+
+# ---------------------------------------------------------------- restock watch
+
+STORE_BY_NAME = {s["name"]: s for s in CONFIG["stores"]}
+
+def update_watchlist(deals, state):
+    """Sold-out listings that would be profitable at their listed price. Heads-up message once each."""
+    watch = state.setdefault("watch", {})
+    fresh = {d["key"]: d for d in deals if d["profitable"] and not d["in_stock"] and mine(d["store"])
+             and STORE_BY_NAME.get(d["store"], {}).get("type") in ("shopify", "woo")}
+    for k in list(watch):
+        if k not in fresh:
+            del watch[k]
+    for k, d in sorted(fresh.items(), key=lambda kv: -kv[1]["profit"])[:CONFIG["updates"]["max_watch"]]:
+        if k not in watch:
+            notify(f"WATCHING (sold out): {d['store']}",
+                   deal_msg(d) + "\nI check it every minute and message you the moment it's buyable.",
+                   priority=3, click=d["url"])
+            state["last_msg"] = time.time()
+        watch[k] = {f: d[f] for f in ("store", "title", "url", "price", "value", "profit", "roi")}
+
+def poll_listing(w):
+    """Live stock + price for one watched listing: (in_stock, price) or None if unknown."""
+    st = STORE_BY_NAME[w["store"]]
+    pid = w.get("pid")
+    if st["type"] == "shopify":
+        with SHOPIFY_GATE:
+            p = get_json(w["url"].split("?")[0] + ".js", tries=2)
+        return bool(p.get("available")), (p.get("price") or 0) / 100
+    if st["type"] == "woo":
+        p = get_json(f"{st['url']}/wp-json/wc/store/v1/products/{pid}", tries=2)
+        pr = p.get("prices") or {}
+        price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
+        return bool(p.get("is_in_stock") or p.get("is_on_backorder")), price
+    return None
+
+def watch_loop(state, until):
+    """Between full scans, check every watched listing about once a minute until `until` (epoch)."""
+    watch = state.get("watch", {})
+    if not watch:
+        return
+    cfg = CONFIG["resale"]
+    print(f"watching {len(watch)} sold-out profitable listings until {dt.datetime.fromtimestamp(until):%H:%M}")
+    while time.time() < until - 20 and watch:
+        t0 = time.time()
+        for key, w in list(watch.items()):
+            w["pid"] = key.split("|", 1)[1]
+            try:
+                res = poll_listing(w)
+            except Exception as e:
+                print("watch poll failed:", w["store"], e, file=sys.stderr)
+                continue
+            if not res or not res[0]:
+                continue
+            price = res[1] or w["price"]
+            profit = w["value"] * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"] - price - cfg["buy_shipping_rand"]
+            roi = profit / (price + cfg["buy_shipping_rand"])
+            if profit >= cfg["min_profit_rand"] and roi >= cfg["min_roi"]:
+                notify(f"RESTOCKED, BUY NOW: {w['store']}",
+                       deal_msg(dict(w, price=price, profit=round(profit), roi=roi)), priority=5, click=w["url"])
+                state.setdefault("alerted", {})[key] = {"price": price, "active": True}
+                state["last_msg"] = time.time()
+            if key in state.get("items", {}):
+                state["items"][key].update(in_stock=True, price=price)
+            del watch[key]
+        time.sleep(max(5, 60 - (time.time() - t0)))
 
 # ---------------------------------------------------------------- dashboard
 
 def write_dashboard(state, deals):
     drows = "".join(
-        f'<tr class="{"hot" if d["deal"] else ""}"><td><a href="{html.escape(d["url"])}">{html.escape(d["title"])}</a>'
+        f'<tr class="{"hot" if d["deal"] else ""} {"" if d["in_stock"] else "out"}"><td><a href="{html.escape(d["url"])}">{html.escape(d["title"])}</a>'
         f'<div class="s">{html.escape(d["store"])} | <a href="{d["tcg_url"]}">TCGplayer</a></div></td>'
         f'<td class="n">R{d["price"]:,.0f}</td><td class="n">R{d["us_zar"]:,.0f}</td>'
         f'<td class="n">R{d["sa_median"]:,.0f}</td><td class="n">R{d["profit"]:,.0f}</td></tr>'
@@ -330,7 +395,7 @@ def heartbeat(state, results, deals):
     hours = CONFIG["updates"]["heartbeat_hours"]
     if not IS_CLOUD or not hours or time.time() - state.get("last_msg", 0) < hours * 3600:
         return
-    best = [d for d in deals if not d["deal"]][:3]
+    best = [d for d in deals if d["in_stock"] and not d["deal"]][:3]
     near = "\n".join(f"- {d['title']} at {d['store']}: R{d['price']:,.0f}, est. {'+' if d['profit'] >= 0 else '-'}R{abs(d['profit']):,.0f}"
                      for d in best)
     notify("Pokemon monitor: still watching",
@@ -386,6 +451,8 @@ def main():
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {"items": {}, "stores": {}}
     now = dt.datetime.now().isoformat(timespec="seconds")
 
+    # a store's first successful scan only records what it has; announcing all of it would be spam
+    known = {n for n, st in state["stores"].items() if st.get("ok") or st.get("count")}
     results = {}
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
         futs = {ex.submit(SCANNERS[s["type"]], s["name"], s["url"]): s["name"] for s in active_stores()}
@@ -409,7 +476,8 @@ def main():
             old = state["items"].get(it["key"])
             if old is None:
                 it["first_seen"] = now
-                events.append(("NEW", it))
+                if name in known:
+                    events.append(("NEW", it))
             else:
                 it["first_seen"] = old["first_seen"]
                 if it["in_stock"] and not old["in_stock"]:
@@ -439,9 +507,14 @@ def main():
     if "--dry-run" in args:
         return
     send_deals(deals, state)
+    update_watchlist(deals, state)
     if not seeding:
         send_updates(events, state)
     heartbeat(state, results, deals)
+    until = next((float(a.split("=", 1)[1]) for a in args if a.startswith("--watch-until=")), 0)
+    if until:
+        STATE_FILE.write_text(json.dumps(state, indent=1))  # save once before the long watch
+        watch_loop(state, until)
     STATE_FILE.write_text(json.dumps(state, indent=1))
     write_dashboard(state, deals)
 

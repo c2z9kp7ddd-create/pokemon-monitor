@@ -33,8 +33,9 @@ jobs:
           key: state-${{ github.run_id }}
           restore-keys: state-
 
-      - name: Scan stores and send deal alerts
-        run: python monitor.py
+      # full scan, then watch sold-out profitable boxes every minute until the next run takes over
+      - name: Scan stores, send alerts, watch restocks
+        run: python monitor.py --watch-until=$(( START + 560 ))
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
