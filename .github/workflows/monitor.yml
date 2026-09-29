@@ -11,12 +11,15 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write   # lets each run queue the next one
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - run: echo "START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -51,3 +54,16 @@ jobs:
             git commit --allow-empty -m "keepalive"
             git push
           fi
+
+      # GitHub's cron is unreliable (runs late or not at all), so each run books the next one
+      # roughly 10 minutes after it started. The cron above stays as a backup.
+      - name: Queue next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          wait=$(( 570 - ($(date +%s) - START) ))
+          [ $wait -gt 0 ] && sleep $wait
+          others=$(gh run list --workflow monitor.yml --limit 10 --json databaseId,status \
+            --jq "[.[] | select(.databaseId != ${{ github.run_id }} and .status != \"completed\")] | length")
+          if [ "$others" = "0" ]; then gh workflow run monitor.yml --ref main; else echo "next run already queued"; fi

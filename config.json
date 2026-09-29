@@ -177,5 +177,11 @@
     "Geek Zone",
     "ThunderBolt Gaming",
     "The Geek Home"
-  ]
+  ],
+  "updates": {
+    "new_listings": true,
+    "restocks": true,
+    "price_drop_pct": 10,
+    "heartbeat_hours": 3
+  }
 }

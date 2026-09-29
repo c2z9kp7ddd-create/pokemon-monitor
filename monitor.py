@@ -171,7 +171,7 @@ SCANNERS = {"shopify": scan_shopify, "woo": scan_woo,
 
 SECRETS_FILE = HERE / "secrets.json"  # telegram / discord credentials, written by setup_phone.py
 
-def notify(title, message, priority=3, click=None):
+def notify(title, message, priority=3, click=None, tg_html=None):
     """Send to every channel that is set up: Telegram, Discord, and ntfy if enabled."""
     sec = json.loads(SECRETS_FILE.read_text()) if SECRETS_FILE.exists() else {}
     if os.environ.get("TELEGRAM_TOKEN"):  # cloud run: credentials come from GitHub secrets
@@ -188,12 +188,12 @@ def notify(title, message, priority=3, click=None):
         except Exception as e:
             print("telegram chat lookup failed:", e, file=sys.stderr)
     if tg and tg.get("chat_id"):
-        text = f"<b>{html.escape(title)}</b>\n{html.escape(message)}"
+        text = f"<b>{html.escape(title)}</b>\n" + (tg_html or html.escape(message))
         if click:
             text += f'\n\n<a href="{html.escape(click)}">Open product</a>'
         sends.append(("telegram", f"https://api.telegram.org/bot{tg['token']}/sendMessage",
                       {"chat_id": tg["chat_id"], "text": text, "parse_mode": "HTML",
-                       "disable_web_page_preview": False}))
+                       "disable_web_page_preview": bool(tg_html)}))
     if sec.get("discord_webhook"):
         content = f"**{title}**\n{message}" + (f"\n{click}" if click else "")
         sends.append(("discord", sec["discord_webhook"], {"content": content[:1990]}))
@@ -234,6 +234,7 @@ def send_deals(deals, state):
         if prev and prev["active"] and d["price"] > prev["price"] * 0.95:
             continue
         notify(f"Profit R{d['profit']:,.0f}: {d['store']}", deal_msg(d), priority=5, click=d["url"])
+        state["last_msg"] = time.time()
         sent[d["key"]] = {"price": d["price"], "active": True, "at": d.get("at")}
     for k, v in sent.items():
         if k not in live:
@@ -295,6 +296,67 @@ def active_stores():
     local_only = set(CONFIG.get("local_only_stores", []))
     return [s for s in CONFIG["stores"] if not (IS_CLOUD and s["name"] in local_only)]
 
+def mine(store):
+    """Cloud reports every store it scans; the Mac only reports the stores the cloud can't reach."""
+    return IS_CLOUD or store in set(CONFIG.get("local_only_stores", []))
+
+def send_updates(events, state):
+    """One Telegram digest per scan listing new products, restocks and price drops."""
+    cfg = CONFIG["updates"]
+    wanted = {"NEW": cfg["new_listings"], "BACK IN STOCK": cfg["restocks"], "PRICE DROP": True}
+    events = [(k, it) for k, it in events if wanted[k] and mine(it["store"])]
+    if not events:
+        return
+    events.sort(key=lambda e: (not is_hot(e[1]["title"]), e[0]))
+    counts = {k: sum(1 for kk, _ in events if kk == k) for k in wanted}
+    head = ", ".join(f"{n} {k.lower()}" for k, n in counts.items() if n)
+    lines = []
+    for kind, it in events[:20]:
+        price = f"R{it['price']:,.0f}" if it["price"] is not None else "price n/a"
+        if kind == "PRICE DROP":
+            price = f"R{it['was']:,.0f} to {price}"
+        tag = "LIMITED " if is_hot(it["title"]) else ""
+        stock = "" if it["in_stock"] else " (sold out)"
+        lines.append(f"<b>{tag}{kind}</b> | {html.escape(it['store'])} | {price}{stock}\n"
+                     f'<a href="{html.escape(it["url"])}">{html.escape(it["title"])}</a>')
+    if len(events) > 20:
+        lines.append(f"...and {len(events) - 20} more")
+    plain = "\n".join(f"{k}: {it['title']} ({it['store']})" for k, it in events[:20])
+    notify(f"Pokemon update: {head}", plain, priority=3, tg_html="\n\n".join(lines))
+    state["last_msg"] = time.time()
+
+def heartbeat(state, results, deals):
+    """If nothing has been sent for a while, send a short 'still watching' check-in (cloud only)."""
+    hours = CONFIG["updates"]["heartbeat_hours"]
+    if not IS_CLOUD or not hours or time.time() - state.get("last_msg", 0) < hours * 3600:
+        return
+    best = [d for d in deals if not d["deal"]][:3]
+    near = "\n".join(f"- {d['title']} at {d['store']}: R{d['price']:,.0f}, est. {'+' if d['profit'] >= 0 else '-'}R{abs(d['profit']):,.0f}"
+                     for d in best)
+    notify("Pokemon monitor: still watching",
+           f"{len(results)} stores scanned just now, {len(state['items'])} products tracked. No profitable boxes yet.\n"
+           + (f"Closest to profitable:\n{near}" if near else ""))
+    state["last_msg"] = time.time()
+
+def cloud_watchdog():
+    """On the Mac: if the cloud chain has stalled (no run in 30 min), start it again."""
+    import subprocess
+    gh = "/opt/homebrew/bin/gh"
+    if IS_CLOUD or not os.path.exists(gh):
+        return
+    try:
+        out = subprocess.run([gh, "run", "list", "--workflow", "monitor.yml", "--limit", "5",
+                              "--json", "status,createdAt"], cwd=HERE, capture_output=True, text=True, timeout=30)
+        runs = json.loads(out.stdout or "[]")
+        active = any(r["status"] != "completed" for r in runs)
+        last = max((dt.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")) for r in runs), default=None)
+        stale = last is None or dt.datetime.now(dt.timezone.utc) - last > dt.timedelta(minutes=30)
+        if stale and not active:
+            subprocess.run([gh, "workflow", "run", "monitor.yml", "--ref", "main"], cwd=HERE, timeout=30)
+            print("cloud watchdog: restarted cloud monitor")
+    except Exception as e:
+        print("cloud watchdog failed:", e, file=sys.stderr)
+
 def check_health(state, results):
     """One message if most stores have failed for about an hour, one when it recovers,
     so silence on Telegram always means 'no deals', never 'monitor broken'."""
@@ -314,6 +376,8 @@ def check_health(state, results):
 
 def main():
     args = set(sys.argv[1:])
+    if "--dry-run" not in args:
+        cloud_watchdog()
     if "--test" in args:
         notify("Pokemon monitor connected", "Test alert. You will only get messages when a box looks profitable.", 5)
         print("test sent")
@@ -338,6 +402,7 @@ def main():
 
     check_health(state, results)
 
+    seeding = not state["items"]
     events = []
     for name, found in results.items():
         for it in found:
@@ -349,6 +414,10 @@ def main():
                 it["first_seen"] = old["first_seen"]
                 if it["in_stock"] and not old["in_stock"]:
                     events.append(("BACK IN STOCK", it))
+                elif (it["in_stock"] and it["price"] and old.get("price")
+                      and it["price"] <= old["price"] * (1 - CONFIG["updates"]["price_drop_pct"] / 100)):
+                    it["was"] = old["price"]
+                    events.append(("PRICE DROP", it))
             it["last_seen"] = now
             state["items"][it["key"]] = it
 
@@ -370,6 +439,9 @@ def main():
     if "--dry-run" in args:
         return
     send_deals(deals, state)
+    if not seeding:
+        send_updates(events, state)
+    heartbeat(state, results, deals)
     STATE_FILE.write_text(json.dumps(state, indent=1))
     write_dashboard(state, deals)
 
