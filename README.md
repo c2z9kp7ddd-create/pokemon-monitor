@@ -1,19 +1,26 @@
 # SA Pokemon resale monitor
 
-Scans 17 South African stores every 10 minutes. Messages you on Telegram or Discord (run `python3 setup_phone.py` once to connect;
-ntfy also still works, set "ntfy_enabled": false in config.json to turn it off)
-ONLY when an in-stock box looks profitable to resell. Estimates, not guarantees.
+Runs 24/7 on GitHub Actions (each run queues the next ~10 min later; the cron is a backup).
+Scans 27 South African stores and messages Telegram (@Kingpokemon_bot).
 
-A listing alerts only if all of these hold:
-- It is in stock (or open for pre-order) and English (no reliable price data for Japanese/Chinese yet)
-- It matches a TCGplayer product exactly (same set, same product type: ETB vs case vs Pokemon Center etc.)
-- TCGplayer live listings agree with its recent-sales price (stale prices are ignored)
-- At least 2 other SA stores list the same product
-- Resale value = the LOWER of US sales price (in rand) and the SA median
-- After 12% selling fees, R120 postage out, R100 postage in: profit >= R300 and >= 25%
+Telegram messages
+- BUY NOW: an in-stock box that should resell at a profit. Shows cost, resale estimate, profit.
+- WATCHING (sold out): a box that would be profitable at its listed price but is sold out.
+  It is then checked about every minute; RESTOCKED, BUY NOW arrives when it is buyable again.
+- Pokemon update: new listings, restocks and 10%+ price drops since the last scan (one digest per scan).
+- Still watching: check-in if nothing has been sent for 3 hours.
+- Monitor problem / back to normal: most stores unreachable for about an hour.
 
-Tune all of this under "resale" in config.json.
+How profit is estimated (settings under "resale" in config.json)
+- Exact TCGplayer match (same set and product type), English products only
+- Resale value = the LOWER of TCGplayer recent sales (in rand) and the median price at 2+ other SA stores
+- Minus 12% selling fees, R120 postage out, R100 postage in; alert if profit >= R300 and >= 25%
+Estimates, not guarantees.
 
-    python3 monitor.py --dry-run   # scan + valuation, print only
-    open dashboard.html            # every valued listing, best margin first
-    launchctl bootout gui/$(id -u)/com.pokemon-monitor   # stop
+Stores that block cloud servers ("local_only_stores") are scanned by the Mac (launchd, every 10 min when awake).
+The Mac also restarts the cloud chain if it has stalled for 30 minutes.
+
+    python3 monitor.py --dry-run     # scan + valuation, print only
+    python3 setup_phone.py           # reconnect Telegram / Discord
+    gh workflow run monitor.yml      # start the cloud run manually
+    launchctl bootout gui/$(id -u)/com.pokemon-monitor   # stop the Mac copy
