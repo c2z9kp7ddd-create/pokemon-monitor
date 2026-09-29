@@ -244,7 +244,8 @@ def send_deals(deals, state):
 STORE_BY_NAME = {s["name"]: s for s in CONFIG["stores"]}
 
 def update_watchlist(deals, state):
-    """Sold-out listings that would be profitable at their listed price. Heads-up message once each."""
+    """Sold-out listings that would be profitable at their listed price. Watched silently;
+    the only message is the one sent when a listing becomes buyable."""
     watch = state.setdefault("watch", {})
     fresh = {d["key"]: d for d in deals if d["profitable"] and not d["in_stock"] and mine(d["store"])
              and STORE_BY_NAME.get(d["store"], {}).get("type") in ("shopify", "woo")}
@@ -252,11 +253,6 @@ def update_watchlist(deals, state):
         if k not in fresh:
             del watch[k]
     for k, d in sorted(fresh.items(), key=lambda kv: -kv[1]["profit"])[:CONFIG["updates"]["max_watch"]]:
-        if k not in watch:
-            notify(f"WATCHING (sold out): {d['store']}",
-                   deal_msg(d) + "\nI check it every minute and message you the moment it's buyable.",
-                   priority=3, click=d["url"])
-            state["last_msg"] = time.time()
         watch[k] = {f: d[f] for f in ("store", "title", "url", "price", "value", "profit", "roi")}
 
 def poll_listing(w):
@@ -369,7 +365,7 @@ def send_updates(events, state):
     """One Telegram digest per scan listing new products, restocks and price drops."""
     cfg = CONFIG["updates"]
     wanted = {"NEW": cfg["new_listings"], "BACK IN STOCK": cfg["restocks"], "PRICE DROP": True}
-    events = [(k, it) for k, it in events if wanted[k] and mine(it["store"])]
+    events = [(k, it) for k, it in events if wanted[k] and it["in_stock"] and mine(it["store"])]
     if not events:
         return
     events.sort(key=lambda e: (not is_hot(e[1]["title"]), e[0]))
@@ -381,8 +377,7 @@ def send_updates(events, state):
         if kind == "PRICE DROP":
             price = f"R{it['was']:,.0f} to {price}"
         tag = "LIMITED " if is_hot(it["title"]) else ""
-        stock = "" if it["in_stock"] else " (sold out)"
-        lines.append(f"<b>{tag}{kind}</b> | {html.escape(it['store'])} | {price}{stock}\n"
+        lines.append(f"<b>{tag}{kind}</b> | {html.escape(it['store'])} | {price}\n"
                      f'<a href="{html.escape(it["url"])}">{html.escape(it["title"])}</a>')
     if len(events) > 20:
         lines.append(f"...and {len(events) - 20} more")
