@@ -5,7 +5,8 @@ Scans 27 South African stores and messages Telegram (@Kingpokemon_bot).
 
 Telegram messages
 - BUY NOW: an in-stock box that should resell at a profit. Shows cost, resale estimate, profit.
-- Sold-out boxes that would be profitable are watched silently (checked about every minute).
+- Sold-out boxes that would be profitable are watched silently (checked about every minute);
+  RESTOCKED, BUY NOW arrives the moment one is buyable again.
 - Pokemon update: in-stock new listings, restocks and 10%+ price drops since the last scan (one digest per scan).
 - Still watching: check-in if nothing has been sent for 3 hours.
 - Monitor problem / back to normal: most stores unreachable for about an hour.
