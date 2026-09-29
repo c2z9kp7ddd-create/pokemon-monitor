@@ -15,6 +15,9 @@ import html
 import json
 import os
 import re
+import threading
+import time
+import urllib.error
 import ssl
 import sys
 import unicodedata
@@ -62,12 +65,24 @@ def is_hot(title):
 
 # ---------------------------------------------------------------- fetching
 
-def get_json(url, data=None, timeout=25):
-    req = urllib.request.Request(url, data=data, headers={
-        "User-Agent": UA, "Accept": "application/json",
-        **({"Content-Type": "application/json"} if data else {})})
-    with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as r:
-        return json.loads(r.read().decode("utf-8", "replace"))
+def get_json(url, data=None, timeout=25, tries=4):
+    """Fetch JSON; on 429/5xx wait (honouring Retry-After) and try again."""
+    for attempt in range(tries):
+        req = urllib.request.Request(url, data=data, headers={
+            "User-Agent": UA, "Accept": "application/json",
+            **({"Content-Type": "application/json"} if data else {})})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504) or attempt == tries - 1:
+                raise
+            wait = e.headers.get("Retry-After")
+            time.sleep(min(float(wait), 30) if wait and wait.replace(".", "").isdigit() else 5 * (attempt + 1))
+
+# Cloud runs (GitHub Actions) share IPs that some stores block; those stores are scanned from the Mac instead
+IS_CLOUD = bool(os.environ.get("GITHUB_ACTIONS"))
+SHOPIFY_GATE = threading.Semaphore(1)  # Shopify rate-limits per IP across all its stores: one at a time
 
 def item(store, pid, title, url, price, in_stock):
     return {"key": f"{store}|{pid}", "store": store, "title": norm(title), "url": url,
@@ -75,8 +90,14 @@ def item(store, pid, title, url, price, in_stock):
             "in_stock": bool(in_stock)}
 
 def scan_shopify(store, base, max_pages=40):
+    with SHOPIFY_GATE:
+        return _scan_shopify(store, base, max_pages)
+
+def _scan_shopify(store, base, max_pages):
     out = []
     for page in range(1, max_pages + 1):
+        if page > 1:
+            time.sleep(1)
         d = get_json(f"{base}/products.json?limit=250&page={page}")
         prods = d.get("products", [])
         for p in prods:
@@ -204,8 +225,10 @@ def send_deals(deals, state):
     """Alert once per deal; again only if the price drops 5%+ or it sold out and came back."""
     sent = state.setdefault("alerted", {})
     live = {d["key"] for d in deals if d["deal"]}
+    local_only = set(CONFIG.get("local_only_stores", []))
     for d in deals:
-        if not d["deal"]:
+        # the Mac copy alerts only for stores the cloud can't reach, so nothing arrives twice
+        if not d["deal"] or (not IS_CLOUD and d["store"] not in local_only):
             continue
         prev = sent.get(d["key"])
         if prev and prev["active"] and d["price"] > prev["price"] * 0.95:
@@ -268,18 +291,23 @@ tr.out{{opacity:.55}}details{{margin-top:20px;color:var(--mut)}}ul{{padding-left
 q.oninput=()=>{{const v=q.value.toLowerCase();for(const r of t.rows)r.style.display=r.textContent.toLowerCase().includes(v)?'':'none'}}
 </script></body></html>""")
 
+def active_stores():
+    local_only = set(CONFIG.get("local_only_stores", []))
+    return [s for s in CONFIG["stores"] if not (IS_CLOUD and s["name"] in local_only)]
+
 def check_health(state, results):
     """One message if most stores have failed for about an hour, one when it recovers,
     so silence on Telegram always means 'no deals', never 'monitor broken'."""
-    bad = len(results) < len(CONFIG["stores"]) / 2
+    n = len(active_stores())
+    bad = len(results) < n / 2
     state["bad_runs"] = state.get("bad_runs", 0) + 1 if bad else 0
     if state["bad_runs"] == 6:
         notify("Pokemon monitor problem",
-               f"Only {len(results)} of {len(CONFIG['stores'])} stores answered for the last 6 scans. "
+               f"Only {len(results)} of {n} stores answered for the last 6 scans. "
                "Deal alerts may be missed until this clears.")
         state["warned"] = True
     elif not bad and state.get("warned"):
-        notify("Pokemon monitor back to normal", f"{len(results)} of {len(CONFIG['stores'])} stores answering again.")
+        notify("Pokemon monitor back to normal", f"{len(results)} of {n} stores answering again.")
         state["warned"] = False
 
 # ---------------------------------------------------------------- main
@@ -296,7 +324,7 @@ def main():
 
     results = {}
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(SCANNERS[s["type"]], s["name"], s["url"]): s["name"] for s in CONFIG["stores"]}
+        futs = {ex.submit(SCANNERS[s["type"]], s["name"], s["url"]): s["name"] for s in active_stores()}
         for f in cf.as_completed(futs):
             name = futs[f]
             try:

@@ -172,5 +172,9 @@
     "price_refresh_hours": 24,
     "max_lookups_per_run": 120
   },
-  "ntfy_enabled": false
+  "ntfy_enabled": false,
+  "local_only_stores": [
+    "Geek Zone",
+    "ThunderBolt Gaming"
+  ]
 }
