@@ -1,0 +1,53 @@
+name: pokemon-monitor
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # GitHub may start runs a few minutes late at busy times
+  workflow_dispatch:
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # state.json (seen products, price cache, sent alerts) lives in the Actions cache, not the repo
+      - uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Scan stores and send deal alerts
+        run: python monitor.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - uses: actions/cache/save@v4
+        if: always() && hashFiles('state.json') != ''
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # GitHub pauses schedules after 60 days without commits; an empty commit every ~50 days prevents that
+      - name: Keep schedule alive
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt 4320000 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive"
+            git push
+          fi

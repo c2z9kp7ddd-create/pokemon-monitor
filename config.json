@@ -1,0 +1,176 @@
+{
+  "ntfy_server": "https://ntfy.sh",
+  "hot_words": [
+    "30th",
+    "anniversary",
+    "celebration",
+    "ultra premium",
+    "ultra-premium",
+    "upc",
+    "super premium",
+    "special collection",
+    "special edition",
+    "limited",
+    "exclusive",
+    "pokemon center",
+    "collector",
+    "first partner",
+    "prismatic",
+    "illustration collection"
+  ],
+  "tcg_words": [
+    "tcg",
+    "trading card",
+    "booster",
+    "elite trainer",
+    "etb",
+    " tin",
+    "collection",
+    "deck",
+    "blister",
+    "bundle",
+    "box",
+    "pack",
+    "binder",
+    "card",
+    "premium",
+    "display",
+    "celebration"
+  ],
+  "exclude_words": [
+    "plush",
+    "lego",
+    "t-shirt",
+    "tshirt",
+    "hoodie",
+    "backpack",
+    "mug",
+    "nintendo switch",
+    "keychain",
+    "key ring",
+    "costume",
+    "lunch",
+    "bottle",
+    "socks",
+    "cap ",
+    "sleeves",
+    "sleeve",
+    "playmat",
+    "deck box",
+    "toploader",
+    "single",
+    "psa ",
+    "graded",
+    "slab",
+    "figure only",
+    "pencil",
+    "stationery",
+    "puzzle",
+    "birthday",
+    "party",
+    "game for",
+    "funko",
+    "switch",
+    "pop!",
+    "video game"
+  ],
+  "stores": [
+    {
+      "name": "Takealot",
+      "type": "takealot",
+      "url": "https://www.takealot.com"
+    },
+    {
+      "name": "Toy Kingdom",
+      "type": "shopify",
+      "url": "https://toykingdom.co.za"
+    },
+    {
+      "name": "Toys R Us",
+      "type": "magento",
+      "url": "https://www.toysrus.co.za"
+    },
+    {
+      "name": "Nintendo Store SA",
+      "type": "shopify",
+      "url": "https://store.nintendo.co.za"
+    },
+    {
+      "name": "Poke Store",
+      "type": "woo",
+      "url": "https://pokestore.co.za"
+    },
+    {
+      "name": "Rocket Grunt TCG",
+      "type": "woo",
+      "url": "https://rocketgrunttcg.co.za"
+    },
+    {
+      "name": "TCGXchange",
+      "type": "woo",
+      "url": "https://tcgxchange.co.za"
+    },
+    {
+      "name": "Geek Zone",
+      "type": "woo",
+      "url": "https://www.geek-zone.co.za"
+    },
+    {
+      "name": "ThunderBolt Gaming",
+      "type": "woo",
+      "url": "https://tbgaming.co.za"
+    },
+    {
+      "name": "PokePlugZA",
+      "type": "shopify",
+      "url": "https://pokeplug.co.za"
+    },
+    {
+      "name": "Level Up Store",
+      "type": "shopify",
+      "url": "https://levelupstore.co.za"
+    },
+    {
+      "name": "Geekstop ZA",
+      "type": "shopify",
+      "url": "https://www.gstopza.co.za"
+    },
+    {
+      "name": "Elite Games",
+      "type": "shopify",
+      "url": "https://elitegames.co.za"
+    },
+    {
+      "name": "Vitika Imports",
+      "type": "shopify",
+      "url": "https://vitikaimports.co.za"
+    },
+    {
+      "name": "Aniware",
+      "type": "shopify",
+      "url": "https://sealed.aniware.co.za"
+    },
+    {
+      "name": "The Geek Home",
+      "type": "woo",
+      "url": "https://www.geekhome.co.za"
+    },
+    {
+      "name": "Kitsune Relics",
+      "type": "woo",
+      "url": "https://www.kitsunerelics.co.za"
+    }
+  ],
+  "resale": {
+    "min_profit_rand": 300,
+    "min_roi": 0.25,
+    "sell_fee_pct": 0.12,
+    "sell_shipping_rand": 120,
+    "buy_shipping_rand": 100,
+    "min_other_sa_stores": 2,
+    "min_market_usd": 10,
+    "price_refresh_hours": 24,
+    "max_lookups_per_run": 120
+  },
+  "ntfy_enabled": false
+}

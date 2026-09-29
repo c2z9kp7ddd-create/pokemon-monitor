@@ -1,0 +1,6 @@
+secrets.json
+state.json
+dashboard.html
+monitor.log
+__pycache__/
+com.pokemon-monitor.plist
