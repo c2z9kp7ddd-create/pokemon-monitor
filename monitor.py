@@ -63,8 +63,23 @@ SINGLE_CARD = re.compile(r"\b\d{1,3}/\d{1,3}\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3
 
 THIRTIETH = re.compile(r"\b30\s?th\b|\b30 years\b|\b30-year", re.I)
 
+# 20th Anniversary (2016): XY Evolutions, Generations and the Japanese CP6 20th Anniversary set,
+# booster boxes and Elite Trainer Boxes only
+TWENTIETH = re.compile(r"\b20\s?th\b|\bxy\W*evolutions\b|(?<!prismatic )(?<!mega )\bevolutions\b|\bgenerations\b|\bcp6\b", re.I)
+BOX_OR_ETB = re.compile(r"booster (box|display)|elite trainer|\betb\b", re.I)
+
+def anniversary(title):
+    """'30TH' or '20TH' for the products Gideon wants alerts on, else None."""
+    t = norm(title)
+    if THIRTIETH.search(t):
+        return "30TH"
+    if TWENTIETH.search(t) and BOX_OR_ETB.search(t) and not re.search(r"prismatic|mega evolution", t, re.I):
+        return "20TH"
+    return None
+
 def is_30th(title):
-    return bool(THIRTIETH.search(norm(title)))
+    """Wanted product (20th Anniversary box/ETB or any 30th Anniversary item)."""
+    return anniversary(title) is not None
 
 def msg_30th(it, deals_by_key):
     """Short release message: cost, plus resale and profit when the listing could be valued."""
@@ -75,12 +90,13 @@ def msg_30th(it, deals_by_key):
     return f"{it['title']}\n{line}"
 
 def send_30th(events, deals, state):
-    """Every 30th Anniversary listing that becomes buyable gets its own message, any price."""
+    """Every wanted anniversary listing that becomes buyable gets its own message, any price."""
     by_key = {d["key"]: d for d in deals}
     sent = []
     for kind, it in events:
         if kind in ("NEW", "BACK IN STOCK") and it["in_stock"] and is_30th(it["title"]) and mine(it["store"]):
-            notify(f"30TH ANNIVERSARY IN STOCK: {it['store']}", msg_30th(it, by_key), priority=5, click=it["url"])
+            notify(f"{anniversary(it['title'])} ANNIVERSARY IN STOCK: {it['store']}", msg_30th(it, by_key),
+                   priority=5, click=it["url"])
             sent.append(it["key"])
     if sent:
         state["last_msg"] = time.time()
@@ -107,7 +123,7 @@ def snapshot_30th(state, deals):
         lines.append(f'{html.escape(i["store"])} | R{i["price"]:,.0f}{extra}\n<a href="{html.escape(i["url"])}">{html.escape(i["title"])}</a>')
     if len(live) > 15:
         lines.append(f"...and {len(live) - 15} more")
-    notify(f"30th Anniversary: {len(live)} listings buyable now",
+    notify(f"20th + 30th Anniversary: {len(live)} listings buyable now",
            "\n".join(f"{i['store']}: {i['title']}" for i in live[:15]) or "None in stock right now.",
            tg_html="\n\n".join(lines) or "None in stock right now. You'll get a message the moment one is.")
     state["snapshot_30th_sent"] = True
@@ -279,7 +295,7 @@ def send_deals(deals, state):
     live = {d["key"] for d in deals if d["deal"]}
     for d in deals:
         # the Mac copy alerts only for stores the cloud can't reach, so nothing arrives twice
-        if not d["deal"] or not mine(d["store"]):
+        if not d["deal"] or not mine(d["store"]) or not is_30th(d["title"]):
             continue
         prev = sent.get(d["key"])
         if prev and prev["active"] and d["price"] > prev["price"] * 0.95:
@@ -300,6 +316,7 @@ def update_watchlist(deals, state):
     the only message is the one sent when a listing becomes buyable."""
     watch = state.setdefault("watch", {})
     fresh = {d["key"]: d for d in deals if d["profitable"] and not d["in_stock"] and mine(d["store"])
+             and is_30th(d["title"])
              and STORE_BY_NAME.get(d["store"], {}).get("type") in ("shopify", "woo")}
     for k in list(watch):
         if k not in fresh and not (k in state["items"] and is_30th(state["items"][k]["title"])
@@ -359,7 +376,7 @@ def watch_loop(state, until):
                 roi = profit / (price + cfg["buy_shipping_rand"])
             if w.get("is30"):
                 d = {key: dict(w, price=price, profit=round(profit), roi=roi)} if profit is not None else {}
-                notify(f"30TH ANNIVERSARY IN STOCK: {w['store']}", msg_30th(dict(w, key=key, price=price), d),
+                notify(f"{anniversary(w['title'])} ANNIVERSARY IN STOCK: {w['store']}", msg_30th(dict(w, key=key, price=price), d),
                        priority=5, click=w["url"])
                 state["last_msg"] = time.time()
             elif profit is not None and profit >= cfg["min_profit_rand"] and roi >= cfg["min_roi"]:
@@ -436,7 +453,8 @@ def send_updates(events, state):
     """One Telegram digest per scan listing new products, restocks and price drops."""
     cfg = CONFIG["updates"]
     wanted = {"NEW": cfg["new_listings"], "BACK IN STOCK": cfg["restocks"], "PRICE DROP": True}
-    events = [(k, it) for k, it in events if wanted[k] and it["in_stock"] and mine(it["store"])]
+    events = [(k, it) for k, it in events
+              if k == "PRICE DROP" and it["in_stock"] and mine(it["store"]) and is_30th(it["title"])]
     if not events:
         return
     events.sort(key=lambda e: (not is_hot(e[1]["title"]), e[0]))
@@ -461,12 +479,11 @@ def heartbeat(state, results, deals):
     hours = CONFIG["updates"]["heartbeat_hours"]
     if not IS_CLOUD or not hours or time.time() - state.get("last_msg", 0) < hours * 3600:
         return
-    best = [d for d in deals if d["in_stock"] and not d["deal"]][:3]
-    near = "\n".join(f"- {d['title']} at {d['store']}: R{d['price']:,.0f}, est. {'+' if d['profit'] >= 0 else '-'}R{abs(d['profit']):,.0f}"
-                     for d in best)
+    tracked = [i for i in state["items"].values() if is_30th(i["title"]) and current(i)]
+    buyable = sum(i["in_stock"] for i in tracked)
     notify("Pokemon monitor: still watching",
-           f"{len(results)} stores scanned just now, {len(state['items'])} products tracked. No profitable boxes yet.\n"
-           + (f"Closest to profitable:\n{near}" if near else ""))
+           f"{len(results)} stores checked. Tracking {len(tracked)} 20th/30th Anniversary listings, "
+           f"{buyable} buyable. You'll get a message the moment another one is.")
     state["last_msg"] = time.time()
 
 def cloud_watchdog():

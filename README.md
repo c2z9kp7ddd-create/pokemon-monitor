@@ -3,13 +3,13 @@
 Runs 24/7 on GitHub Actions (each run queues the next ~10 min later; the cron is a backup).
 Scans 27 South African stores and messages Telegram (@Kingpokemon_bot).
 
-Telegram messages
-- 30TH ANNIVERSARY IN STOCK: any 30th Anniversary / 30th Celebration listing that becomes buyable, any price (cost, plus profit when known). Sold-out ones are checked every minute.
-- BUY NOW: an in-stock box that should resell at a profit. Shows cost, resale estimate, profit.
-- Sold-out boxes that would be profitable are watched silently (checked about every minute);
-  RESTOCKED, BUY NOW arrives the moment one is buyable again.
-- Pokemon update: in-stock new listings, restocks and 10%+ price drops since the last scan (one digest per scan).
-- Still watching: check-in if nothing has been sent for 3 hours.
+Telegram messages: ONLY 20th Anniversary booster boxes / ETBs (XY Evolutions, Generations, Japanese CP6)
+and 30th Anniversary / 30th Celebration products. Nothing else.
+- 20TH / 30TH ANNIVERSARY IN STOCK: one message per listing the moment it is buyable (new, restock or pre-order),
+  any price. Shows cost, plus resale and profit when they can be estimated. Sold-out ones are checked every minute.
+- BUY NOW: a wanted listing that should also resell at a profit.
+- Pokemon update: 10%+ price drops on wanted listings that are in stock.
+- Still watching: daily check-in if nothing else was sent.
 - Monitor problem / back to normal: most stores unreachable for about an hour.
 
 How profit is estimated (settings under "resale" in config.json)
