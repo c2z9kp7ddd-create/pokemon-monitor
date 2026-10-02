@@ -257,7 +257,7 @@
     "max_watch": 40,
     "max_watch_30th": 80
   },
-  "scan_budget_seconds": 300,
+  "scan_budget_seconds": 420,
   "shopify_rescan_minutes": 25,
   "cooldown_minutes": 30
 }

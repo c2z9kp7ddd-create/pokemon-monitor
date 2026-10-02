@@ -162,7 +162,8 @@ def check_deadline():
     if time.time() > SCAN_DEADLINE[0]:
         raise OutOfTime("scan time budget used up")
 
-SHOPIFY_GATE = threading.Semaphore(1)  # Shopify rate-limits per IP across all its stores: one at a time
+# Shopify rate-limits per IP across all its stores: one at a time in the cloud; the Mac isn't throttled
+SHOPIFY_GATE = threading.Semaphore(1 if IS_CLOUD else 8)
 
 def item(store, pid, title, url, price, in_stock):
     return {"key": f"{store}|{pid}", "store": store, "title": norm(title), "url": url,
