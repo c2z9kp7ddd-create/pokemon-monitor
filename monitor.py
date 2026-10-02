@@ -146,11 +146,22 @@ def get_json(url, data=None, timeout=25, tries=4):
         except urllib.error.HTTPError as e:
             if e.code not in (429, 500, 502, 503, 504) or attempt == tries - 1:
                 raise
+            if e.code == 429 and IS_CLOUD:  # Shopify throttles GitHub's IPs; waiting it out blew the time limit
+                raise
             wait = e.headers.get("Retry-After")
             time.sleep(min(float(wait), 30) if wait and wait.replace(".", "").isdigit() else 5 * (attempt + 1))
 
 # Cloud runs (GitHub Actions) share IPs that some stores block; those stores are scanned from the Mac instead
 IS_CLOUD = bool(os.environ.get("GITHUB_ACTIONS"))
+SCAN_DEADLINE = [float("inf")]  # set per run; scanners stop paging once it passes
+
+class OutOfTime(Exception):
+    pass
+
+def check_deadline():
+    if time.time() > SCAN_DEADLINE[0]:
+        raise OutOfTime("scan time budget used up")
+
 SHOPIFY_GATE = threading.Semaphore(1)  # Shopify rate-limits per IP across all its stores: one at a time
 
 def item(store, pid, title, url, price, in_stock):
@@ -165,6 +176,7 @@ def scan_shopify(store, base, max_pages=40):
 def _scan_shopify(store, base, max_pages):
     out = []
     for page in range(1, max_pages + 1):
+        check_deadline()
         if page > 1:
             time.sleep(1)
         d = get_json(f"{base}/products.json?limit=250&page={page}")
@@ -182,6 +194,7 @@ def _scan_shopify(store, base, max_pages):
 def scan_woo(store, base, max_pages=30):
     out = []
     for page in range(1, max_pages + 1):
+        check_deadline()
         prods = get_json(f"{base}/wp-json/wc/store/v1/products?search=pokemon&per_page=100&page={page}")
         for p in prods:
             if not is_tcg(p["name"]):
@@ -360,11 +373,16 @@ def watch_loop(state, until):
     print(f"watching {len(watch)} sold-out listings (profitable or 30th) until {dt.datetime.fromtimestamp(until):%H:%M}")
     while time.time() < until - 20 and watch:
         t0 = time.time()
+        cool = state.setdefault("cooldown", {})
         for key, w in list(watch.items()):
             w["pid"] = key.split("|", 1)[1]
+            if cool.get(w["store"], 0) > time.time():
+                continue
             try:
                 res = poll_listing(w)
             except Exception as e:
+                if "429" in str(e):
+                    cool[w["store"]] = time.time() + CONFIG["cooldown_minutes"] * 60
                 print("watch poll failed:", w["store"], e, file=sys.stderr)
                 continue
             if not res or not res[0]:
@@ -501,22 +519,30 @@ def cloud_watchdog():
         print("auto push failed:", e, file=sys.stderr)
     try:
         out = subprocess.run([gh, "run", "list", "--workflow", "monitor.yml", "--limit", "5",
-                              "--json", "status,createdAt"], cwd=HERE, capture_output=True, text=True, timeout=30)
+                              "--json", "status,conclusion,createdAt"], cwd=HERE, capture_output=True, text=True, timeout=30)
         runs = json.loads(out.stdout or "[]")
         active = any(r["status"] != "completed" for r in runs)
         last = max((dt.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")) for r in runs), default=None)
         stale = last is None or dt.datetime.now(dt.timezone.utc) - last > dt.timedelta(minutes=30)
+        done = [r for r in runs if r["status"] == "completed"][:3]
+        flag = HERE / ".cloud_warned"
+        if len(done) == 3 and all(r.get("conclusion") != "success" for r in done):
+            if not flag.exists():
+                notify("Pokemon monitor problem", "The last 3 cloud runs did not finish. Alerts may be missed until this is fixed.")
+                flag.write_text("1")
+        elif done and done[0].get("conclusion") == "success" and flag.exists():
+            flag.unlink()
         if stale and not active:
             subprocess.run([gh, "workflow", "run", "monitor.yml", "--ref", "main"], cwd=HERE, timeout=30)
             print("cloud watchdog: restarted cloud monitor")
     except Exception as e:
         print("cloud watchdog failed:", e, file=sys.stderr)
 
-def check_health(state, results):
+def check_health(state, results, skipped=()):
     """One message if most stores have failed for about an hour, one when it recovers,
     so silence on Telegram always means 'no deals', never 'monitor broken'."""
     n = len(active_stores())
-    bad = len(results) < n / 2
+    bad = len(results) + len(skipped) < n / 2
     state["bad_runs"] = state.get("bad_runs", 0) + 1 if bad else 0
     if state["bad_runs"] == 6:
         notify("Pokemon monitor problem",
@@ -543,21 +569,42 @@ def main():
 
     # a store's first successful scan only records what it has; announcing all of it would be spam
     known = {n for n, st in state["stores"].items() if st.get("ok") or st.get("count")}
-    results = {}
-    with cf.ThreadPoolExecutor(max_workers=8) as ex:
-        futs = {ex.submit(SCANNERS[s["type"]], s["name"], s["url"]): s["name"] for s in active_stores()}
-        for f in cf.as_completed(futs):
+    results, skipped = {}, []
+    cool = state.setdefault("cooldown", {})
+    last_ok = state.setdefault("last_ok", {})
+    todo = []
+    for st in active_stores():
+        n = st["name"]
+        if cool.get(n, 0) > time.time():
+            skipped.append(n)  # throttled us recently: leave it alone for a while
+        elif (IS_CLOUD and st["type"] == "shopify"
+              and time.time() - last_ok.get(n, 0) < CONFIG["shopify_rescan_minutes"] * 60):
+            skipped.append(n)  # full Shopify catalogues are heavy; rescan each one every N minutes
+        else:
+            todo.append(st)
+    SCAN_DEADLINE[0] = time.time() + CONFIG["scan_budget_seconds"]
+    ex = cf.ThreadPoolExecutor(max_workers=8)
+    futs = {ex.submit(SCANNERS[s["type"]], s["name"], s["url"]): s["name"] for s in todo}
+    try:
+        for f in cf.as_completed(futs, timeout=CONFIG["scan_budget_seconds"] + 30):
             name = futs[f]
             try:
                 results[name] = f.result()
                 state["stores"][name] = {"ok": True, "count": len(results[name]), "error": None, "at": now}
+                last_ok[name] = time.time()
             except Exception as e:
                 prev = state["stores"].get(name, {})
                 state["stores"][name] = {"ok": False, "count": prev.get("count", 0),
                                          "error": str(e)[:200], "at": now}
+                if "429" in str(e):
+                    cool[name] = time.time() + CONFIG["cooldown_minutes"] * 60
                 print(f"[{name}] FAILED: {e}", file=sys.stderr)
+    except cf.TimeoutError:
+        print("scan budget exceeded; unfinished:", [n for f, n in futs.items() if not f.done()], file=sys.stderr)
+    ex.shutdown(wait=False, cancel_futures=True)
+    SCAN_DEADLINE[0] = float("inf")
 
-    check_health(state, results)
+    check_health(state, results, skipped)
 
     seeding = not state["items"]
     events = []
@@ -609,6 +656,9 @@ def main():
         watch_loop(state, until)
     STATE_FILE.write_text(json.dumps(state, indent=1))
     write_dashboard(state, deals)
+    if IS_CLOUD:
+        sys.stdout.flush()
+        os._exit(0)
 
 if __name__ == "__main__":
     main()
