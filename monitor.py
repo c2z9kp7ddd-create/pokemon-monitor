@@ -59,7 +59,7 @@ def is_tcg(title, context=""):
             and not SINGLE_CARD.search(t))
 
 # "Cosmog 013/025", "SWSH123", "Mimikyu 075 ... Promo Cards": individual cards, not sealed product
-SINGLE_CARD = re.compile(r"\b\d{1,3}/\d{1,3}\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b", re.I)
+SINGLE_CARD = re.compile(r"\b\d{1,3}/\d{1,3}|\bbasic \w+ energy\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b", re.I)
 
 THIRTIETH = re.compile(r"\b30\s?th\b|\b30 years\b|\b30-year", re.I)
 
@@ -85,6 +85,8 @@ def msg_30th(it, deals_by_key):
     """Short release message: cost, plus resale and profit when the listing could be valued."""
     d = deals_by_key.get(it["key"])
     line = f"Cost R{it['price']:,.0f}" if it.get("price") else "Price not shown"
+    if it.get("orig"):
+        line += f" ({it['orig']}) + international shipping and SA import VAT"
     if d:
         line += f" | Resell ~R{d['value']:,.0f} | Profit ~R{d['profit']:,.0f} ({d['roi']:.0%})"
     return f"{it['title']}\n{line}"
@@ -152,7 +154,9 @@ def get_json(url, data=None, timeout=25, tries=4):
             time.sleep(min(float(wait), 30) if wait and wait.replace(".", "").isdigit() else 5 * (attempt + 1))
 
 # Cloud runs (GitHub Actions) share IPs that some stores block; those stores are scanned from the Mac instead
-IS_CLOUD = bool(os.environ.get("GITHUB_ACTIONS"))
+IS_GITHUB = bool(os.environ.get("GITHUB_ACTIONS"))
+IS_SERVER = os.environ.get("MONITOR_ROLE") == "server"  # the always-on Oracle server: owns all stores
+IS_CLOUD = IS_GITHUB or IS_SERVER                        # reports every store it scans
 SCAN_DEADLINE = [float("inf")]  # set per run; scanners stop paging once it passes
 
 class OutOfTime(Exception):
@@ -163,7 +167,7 @@ def check_deadline():
         raise OutOfTime("scan time budget used up")
 
 # Shopify rate-limits per IP across all its stores: one at a time in the cloud; the Mac isn't throttled
-SHOPIFY_GATE = threading.Semaphore(1 if IS_CLOUD else 8)
+SHOPIFY_GATE = threading.Semaphore(1 if IS_GITHUB else 3 if IS_SERVER else 8)
 
 def item(store, pid, title, url, price, in_stock):
     return {"key": f"{store}|{pid}", "store": store, "title": norm(title), "url": url,
@@ -248,6 +252,32 @@ def scan_magento(store, base, max_pages=10):
         if len(prods) < 100:
             break
     return out
+
+_FX = {}
+
+def zar_per(cur):
+    """Rand per 1 unit of `cur`, refreshed every 6 hours."""
+    if cur == "ZAR":
+        return 1.0
+    if not _FX or time.time() - _FX.get("_t", 0) > 6 * 3600:
+        rates = get_json("https://open.er-api.com/v6/latest/ZAR")["rates"]
+        _FX.clear(); _FX.update(rates); _FX["_t"] = time.time()
+    return 1 / _FX[cur]
+
+SYMBOL = {"GBP": "£", "USD": "$", "EUR": "€", "JPY": "¥"}
+
+def localize(store, items):
+    """International shops: convert prices to rand, keep the original for the message."""
+    cur = STORE_BY_NAME.get(store, {}).get("currency", "ZAR")
+    if cur == "ZAR":
+        return items
+    rate = zar_per(cur)
+    for it in items:
+        if it["price"] is not None:
+            it["orig"] = f"{SYMBOL.get(cur, cur + ' ')}{it['price']:,.0f}" if cur == "JPY" else f"{SYMBOL.get(cur, cur + ' ')}{it['price']:,.2f}"
+            it["price"] = round(it["price"] * rate, 2)
+        it["intl"] = True
+    return items
 
 SCANNERS = {"shopify": scan_shopify, "woo": scan_woo,
             "takealot": scan_takealot, "magento": scan_magento}
@@ -381,27 +411,118 @@ def poll_listing(w):
         return bool(p.get("is_in_stock") or p.get("is_on_backorder")), price
     return None
 
-def watch_loop(state, until):
-    """Between full scans, check every watched listing about once a minute until `until` (epoch)."""
-    watch = state.get("watch", {})
-    if not watch:
-        return
-    cfg = CONFIG["resale"]
-    print(f"watching {len(watch)} sold-out listings (profitable or 30th) until {dt.datetime.fromtimestamp(until):%H:%M}")
-    while time.time() < until - 20 and watch:
-        t0 = time.time()
-        cool = state.setdefault("cooldown", {})
-        for key, w in list(watch.items()):
-            w["pid"] = key.split("|", 1)[1]
-            if cool.get(w["store"], 0) > time.time():
-                continue
+LAST_DEALS = []  # valuations from the latest full scan, reused by quick scans
+
+def quick_fetch(st):
+    """Cheap 'what changed' request per store: newest listings only."""
+    name, base, kind = st["name"], st["url"], st["type"]
+    if kind == "shopify":
+        prods = get_json(f"{base}/products.json?limit=50", tries=1).get("products", [])
+        out = []
+        for p in prods:
+            if is_tcg(p["title"], f'{p.get("vendor", "")} {p.get("product_type", "")}'):
+                vs = p.get("variants") or [{}]
+                out.append(item(name, p["id"], p["title"], f"{base}/products/{p['handle']}",
+                                vs[0].get("price"), any(v.get("available") for v in vs)))
+        return out
+    if kind == "woo":
+        prods = get_json(f"{base}/wp-json/wc/store/v1/products?search=pokemon&orderby=date&order=desc&per_page=30",
+                         tries=1, timeout=st.get("timeout", 25))
+        out = []
+        for p in prods:
+            if is_tcg(p["name"]):
+                pr = p.get("prices") or {}
+                price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
+                out.append(item(name, p["id"], p["name"], p["permalink"], price,
+                                p.get("is_in_stock") or p.get("is_on_backorder")))
+        return out
+    if kind == "takealot":  # targeted searches instead of the whole Pokemon catalogue
+        out = []
+        for q in ("pokemon 30th", "pokemon evolutions elite trainer", "pokemon generations elite trainer"):
+            d = get_json("https://api.takealot.com/rest/v-1-12-0/searches/products?" + urllib.parse.urlencode({"qsearch": q}), tries=1)
+            for r in d["sections"]["products"].get("results", []):
+                pv, core = r["product_views"], r["product_views"]["core"]
+                if is_tcg(core["title"]):
+                    bb = pv.get("buybox_summary") or {}
+                    out.append(item(name, core["id"], core["title"],
+                                    f"https://www.takealot.com/{core['slug']}/PLID{core['id']}",
+                                    (bb.get("prices") or [None])[0], bb.get("is_add_to_cart_available")))
+        return out
+    return SCANNERS[kind](name, base)  # magento store is small: full scan is cheap
+
+def quick_scan(state):
+    """Every ~2 minutes: newest listings at every store; alert on 20th/30th items that became buyable."""
+    cool = state.setdefault("cooldown", {})
+    stores = [st for st in active_stores() if cool.get(st["name"], 0) <= time.time()]
+    known = {n for n, st in state["stores"].items() if st.get("ok") or st.get("count")}
+    events, now = [], dt.datetime.now().isoformat(timespec="seconds")
+    ex = cf.ThreadPoolExecutor(max_workers=10)
+    futs = {ex.submit(quick_fetch, st): st["name"] for st in stores}
+    done = []
+    try:  # a slow shop (ThunderBolt takes ~1 min) must not delay the every-minute check of the others
+        for f in cf.as_completed(futs, timeout=CONFIG["quick_scan_seconds"] * 0.6):
+            done.append(f)
+    except cf.TimeoutError:
+        pass
+    ex.shutdown(wait=False, cancel_futures=True)
+    for f in done:
+        if True:
+            name = futs[f]
             try:
-                res = poll_listing(w)
+                found = localize(name, f.result())
             except Exception as e:
                 if "429" in str(e):
-                    cool[w["store"]] = time.time() + CONFIG["cooldown_minutes"] * 60
-                print("watch poll failed:", w["store"], e, file=sys.stderr)
+                    cool[name] = time.time() + CONFIG["cooldown_minutes"] * 60
                 continue
+            for it in found:
+                old = state["items"].get(it["key"])
+                if old is None:
+                    it["first_seen"] = now
+                    if name in known:
+                        events.append(("NEW", it))
+                else:
+                    it["first_seen"] = old["first_seen"]
+                    if it["in_stock"] and not old["in_stock"]:
+                        events.append(("BACK IN STOCK", it))
+                it["last_seen"] = now
+                state["items"][it["key"]] = it
+    sent = send_30th(events, LAST_DEALS, state)
+    for k in sent:
+        state.get("watch", {}).pop(k, None)
+    print(f"quick scan {now[11:16]}: {len(stores)} stores, {len(events)} changes, {len(sent)} alerts")
+
+def _safe_poll(w, cool):
+    try:
+        return poll_listing(w)
+    except Exception as e:
+        if "429" in str(e):
+            cool[w["store"]] = time.time() + CONFIG["cooldown_minutes"] * 60
+        print("watch poll failed:", w["store"], e, file=sys.stderr)
+        return None
+
+def watch_loop(state, until):
+    """Between full scans: quick scan of every store about every 2 minutes, and a stock check of each
+    watched sold-out listing about every minute, until `until` (epoch)."""
+    watch = state.setdefault("watch", {})
+    cfg = CONFIG["resale"]
+    print(f"watching {len(watch)} sold-out listings (profitable or 30th) until {dt.datetime.fromtimestamp(until):%H:%M}")
+    last_quick = time.time()
+    while time.time() < until - 20:
+        t0 = time.time()
+        if CONFIG["quick_scan_seconds"] and t0 - last_quick >= CONFIG["quick_scan_seconds"]:
+            try:
+                quick_scan(state)
+            except Exception as e:
+                print("quick scan failed:", e, file=sys.stderr)
+            last_quick = time.time()
+        cool = state.setdefault("cooldown", {})
+        due = [(k, w) for k, w in watch.items() if cool.get(w["store"], 0) <= time.time()]
+        for k, w in due:
+            w["pid"] = k.split("|", 1)[1]
+        with cf.ThreadPoolExecutor(max_workers=8) as ex:  # one slow shop must not hold up the rest
+            polled = dict(zip([k for k, _ in due], ex.map(lambda kw: _safe_poll(kw[1], cool), due)))
+        for key, w in due:
+            res = polled.get(key)
             if not res or not res[0]:
                 continue
             price = res[1] or w["price"]
@@ -478,7 +599,7 @@ q.oninput=()=>{{const v=q.value.toLowerCase();for(const r of t.rows)r.style.disp
 
 def active_stores():
     local_only = set(CONFIG.get("local_only_stores", []))
-    return [s for s in CONFIG["stores"] if not (IS_CLOUD and s["name"] in local_only)]
+    return [s for s in CONFIG["stores"] if not (IS_GITHUB and s["name"] in local_only)]
 
 def mine(store):
     """Cloud reports every store it scans; the Mac only reports the stores the cloud can't reach."""
@@ -585,6 +706,7 @@ def main():
 
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {"items": {}, "stores": {}}
     now = dt.datetime.now().isoformat(timespec="seconds")
+    OUTBOX.clear()
     flush_outbox(state)
 
     # a store's first successful scan only records what it has; announcing all of it would be spam
@@ -597,7 +719,7 @@ def main():
         n = st["name"]
         if cool.get(n, 0) > time.time():
             skipped.append(n)  # throttled us recently: leave it alone for a while
-        elif (IS_CLOUD and st["type"] == "shopify"
+        elif (IS_GITHUB and st["type"] == "shopify"
               and time.time() - last_ok.get(n, 0) < CONFIG["shopify_rescan_minutes"] * 60):
             skipped.append(n)  # full Shopify catalogues are heavy; rescan each one every N minutes
         else:
@@ -609,7 +731,7 @@ def main():
         for f in cf.as_completed(futs, timeout=CONFIG["scan_budget_seconds"] + 30):
             name = futs[f]
             try:
-                results[name] = f.result()
+                results[name] = localize(name, f.result())
                 state["stores"][name] = {"ok": True, "count": len(results[name]), "error": None, "at": now}
                 last_ok[name] = time.time()
             except Exception as e:
@@ -653,7 +775,8 @@ def main():
 
     valuer = valuation.Valuer(get_json, state.setdefault("prices", {}), CONFIG["resale"])
     try:
-        deals = valuation.find_deals(state["items"], valuer, CONFIG["resale"])
+        local = {k: v for k, v in state["items"].items() if not v.get("intl")}  # no shipping/import in intl prices
+        deals = valuation.find_deals(local, valuer, CONFIG["resale"], want=is_30th)
     except Exception as e:
         print("valuation failed:", e, file=sys.stderr)
         deals = []
@@ -663,6 +786,7 @@ def main():
 
     if "--dry-run" in args:
         return
+    LAST_DEALS[:] = deals
     send_deals(deals, state)
     if not seeding:
         done = send_30th(events, deals, state)
@@ -679,9 +803,24 @@ def main():
         watch_loop(state, until)
     STATE_FILE.write_text(json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1))
     write_dashboard(state, deals)
-    if IS_CLOUD:
+    if IS_GITHUB:
         sys.stdout.flush()
         os._exit(0)
 
+def run_forever():
+    """Server mode: a full scan every 10 minutes, quick scans and stock checks in between."""
+    while True:
+        start = time.time()
+        sys.argv = [sys.argv[0], f"--watch-until={start + CONFIG['full_scan_seconds']}"]
+        try:
+            main()
+        except Exception as e:
+            print("cycle failed:", repr(e), file=sys.stderr)
+            time.sleep(60)
+        sys.stdout.flush()
+
 if __name__ == "__main__":
-    main()
+    if "--loop" in sys.argv:
+        run_forever()
+    else:
+        main()

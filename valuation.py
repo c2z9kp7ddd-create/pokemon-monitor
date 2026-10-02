@@ -107,12 +107,13 @@ class Valuer:
         return m
 
 
-def find_deals(items, valuer, cfg):
+def find_deals(items, valuer, cfg, want=None):
     """items: dict key -> listing. Returns every listing that both sources could value, best first.
     profitable = clears the thresholds at the listed price; deal = profitable AND buyable now.
     Profitable-but-sold-out listings feed the fast restock watch."""
     # attach TCGplayer matches; in-stock listings first so the lookup budget goes where it matters
-    ordered = sorted(items.values(), key=lambda i: not i["in_stock"])
+    # want: optional title filter; only those listings are looked up and valued
+    ordered = sorted((i for i in items.values() if want is None or want(i["title"])), key=lambda i: not i["in_stock"])
     for it in ordered:
         it["tcg"] = valuer.tcg_for(it["title"])
 
@@ -123,7 +124,7 @@ def find_deals(items, valuer, cfg):
 
     fx = valuer.fx()
     deals = []
-    for it in items.values():
+    for it in ordered:
         m = it.get("tcg")
         if not (m and it["price"] and m.get("market")):
             continue

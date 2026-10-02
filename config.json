@@ -220,6 +220,24 @@
       "name": "Readers Warehouse",
       "type": "shopify",
       "url": "https://www.readerswarehouse.co.za/collections/pokemon-books-and-cards"
+    },
+    {
+      "name": "Total Cards (UK)",
+      "type": "shopify",
+      "url": "https://totalcards.net/collections/pokemon",
+      "currency": "GBP"
+    },
+    {
+      "name": "Zatu (UK)",
+      "type": "shopify",
+      "url": "https://www.zatu.com/collections/pokemon",
+      "currency": "GBP"
+    },
+    {
+      "name": "PokeNinJapan (Japan)",
+      "type": "shopify",
+      "url": "https://www.pokeninjapan.store/collections/pokemon-card-30th-celebration-product",
+      "currency": "JPY"
     }
   ],
   "resale": {
@@ -246,15 +264,18 @@
     "Marvellous Hobbies",
     "Mithril Vault",
     "Nintendo Store SA",
+    "PokeNinJapan (Japan)",
     "PokePlugZA",
     "Pops Toys",
     "Readers Warehouse",
     "Sword and Board",
     "The Geek Home",
     "ThunderBolt Gaming",
+    "Total Cards (UK)",
     "Toy Kingdom",
     "Vitika Imports",
-    "WZRD TCG"
+    "WZRD TCG",
+    "Zatu (UK)"
   ],
   "updates": {
     "new_listings": true,
@@ -266,5 +287,7 @@
   },
   "scan_budget_seconds": 420,
   "shopify_rescan_minutes": 25,
-  "cooldown_minutes": 30
+  "cooldown_minutes": 30,
+  "quick_scan_seconds": 60,
+  "full_scan_seconds": 600
 }
