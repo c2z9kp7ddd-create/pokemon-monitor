@@ -506,15 +506,15 @@ def watch_loop(state, until):
     watch = state.setdefault("watch", {})
     cfg = CONFIG["resale"]
     print(f"watching {len(watch)} sold-out listings (profitable or 30th) until {dt.datetime.fromtimestamp(until):%H:%M}")
-    last_quick = time.time()
+    last_quick = 0  # first quick scan straight away
     while time.time() < until - 20:
         t0 = time.time()
-        if CONFIG["quick_scan_seconds"] and t0 - last_quick >= CONFIG["quick_scan_seconds"]:
+        if CONFIG["quick_scan_seconds"] and t0 - last_quick >= CONFIG["quick_scan_seconds"] - 5:
+            last_quick = t0  # measured from the start, so checks stay on a steady 1-minute beat
             try:
                 quick_scan(state)
             except Exception as e:
                 print("quick scan failed:", e, file=sys.stderr)
-            last_quick = time.time()
         cool = state.setdefault("cooldown", {})
         due = [(k, w) for k, w in watch.items() if cool.get(w["store"], 0) <= time.time()]
         for k, w in due:
