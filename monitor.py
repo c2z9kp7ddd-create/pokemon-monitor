@@ -555,6 +555,8 @@ def check_health(state, results, skipped=()):
 
 # ---------------------------------------------------------------- main
 
+RUN_START = time.time()
+
 def main():
     args = set(sys.argv[1:])
     if "--dry-run" not in args:
@@ -651,6 +653,9 @@ def main():
     update_watchlist(deals, state)
     heartbeat(state, results, deals)
     until = next((float(a.split("=", 1)[1]) for a in args if a.startswith("--watch-until=")), 0)
+    watch_for = next((float(a.split("=", 1)[1]) for a in args if a.startswith("--watch-for=")), 0)
+    if watch_for:  # Mac: watch until this many seconds after the run started
+        until = RUN_START + watch_for
     if until:
         STATE_FILE.write_text(json.dumps(state, indent=1))  # save once before the long watch
         watch_loop(state, until)
