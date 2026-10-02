@@ -260,7 +260,7 @@
     "new_listings": true,
     "restocks": true,
     "price_drop_pct": 10,
-    "heartbeat_hours": 24,
+    "heartbeat_hours": 6,
     "max_watch": 40,
     "max_watch_30th": 80
   },

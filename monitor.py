@@ -292,8 +292,22 @@ def notify(title, message, priority=3, click=None, tg_html=None):
             req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
                 "User-Agent": UA, "Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=20, context=SSL_CTX).read()
+            print(f"sent via {name}: {title}")
         except Exception as e:  # never let a failed push kill the run
             print(f"notify via {name} failed:", e, file=sys.stderr)
+            if name == "telegram":  # kept and retried next run (see flush_outbox)
+                OUTBOX.append({"title": title, "message": message, "click": click,
+                               "tg_html": tg_html, "t": time.time()})
+
+OUTBOX = []  # Telegram messages that failed this run
+
+def flush_outbox(state):
+    """Resend Telegram messages that failed on an earlier run (e.g. on a network that blocks Telegram).
+    Anything older than a day is dropped: stock news that old is no use."""
+    pending = [m for m in state.pop("outbox", []) if time.time() - m["t"] < 86400]
+    for m in pending:
+        title = m["title"] if m["title"].endswith("(delayed)") else m["title"] + " (delayed)"
+        notify(title, m["message"], click=m["click"], tg_html=m["tg_html"])
 
 def fmt(it):
     price = f"R{it['price']:,.2f}" if it["price"] is not None else "price n/a"
@@ -571,6 +585,7 @@ def main():
 
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {"items": {}, "stores": {}}
     now = dt.datetime.now().isoformat(timespec="seconds")
+    flush_outbox(state)
 
     # a store's first successful scan only records what it has; announcing all of it would be spam
     known = {n for n, st in state["stores"].items() if st.get("ok") or st.get("count")}
@@ -660,9 +675,9 @@ def main():
     if watch_for:  # Mac: watch until this many seconds after the run started
         until = RUN_START + watch_for
     if until:
-        STATE_FILE.write_text(json.dumps(state, indent=1))  # save once before the long watch
+        STATE_FILE.write_text(json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1))  # save once before the long watch
         watch_loop(state, until)
-    STATE_FILE.write_text(json.dumps(state, indent=1))
+    STATE_FILE.write_text(json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1))
     write_dashboard(state, deals)
     if IS_CLOUD:
         sys.stdout.flush()
