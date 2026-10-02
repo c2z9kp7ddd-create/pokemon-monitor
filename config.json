@@ -123,7 +123,8 @@
     {
       "name": "ThunderBolt Gaming",
       "type": "woo",
-      "url": "https://tbgaming.co.za"
+      "url": "https://tbgaming.co.za",
+      "timeout": 120
     },
     {
       "name": "PokePlugZA",
@@ -214,6 +215,11 @@
       "name": "Fantasy Gaming",
       "type": "woo",
       "url": "https://fantasygaming.co.za"
+    },
+    {
+      "name": "Readers Warehouse",
+      "type": "shopify",
+      "url": "https://www.readerswarehouse.co.za/collections/pokemon-books-and-cards"
     }
   ],
   "resale": {
@@ -242,6 +248,7 @@
     "Nintendo Store SA",
     "PokePlugZA",
     "Pops Toys",
+    "Readers Warehouse",
     "Sword and Board",
     "The Geek Home",
     "ThunderBolt Gaming",

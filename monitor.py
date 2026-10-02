@@ -196,7 +196,9 @@ def scan_woo(store, base, max_pages=30):
     out = []
     for page in range(1, max_pages + 1):
         check_deadline()
-        prods = get_json(f"{base}/wp-json/wc/store/v1/products?search=pokemon&per_page=100&page={page}")
+        timeout = STORE_BY_NAME.get(store, {}).get("timeout", 25)  # some shops are just slow
+        prods = get_json(f"{base}/wp-json/wc/store/v1/products?search=pokemon&per_page=100&page={page}",
+                         timeout=timeout)
         for p in prods:
             if not is_tcg(p["name"]):
                 continue
