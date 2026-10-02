@@ -4,6 +4,7 @@ Runs 24/7 on GitHub Actions (each run queues the next ~10 min later; the cron is
 Scans 27 South African stores and messages Telegram (@Kingpokemon_bot).
 
 Telegram messages
+- 30TH ANNIVERSARY IN STOCK: any 30th Anniversary / 30th Celebration listing that becomes buyable, any price (cost, plus profit when known). Sold-out ones are checked every minute.
 - BUY NOW: an in-stock box that should resell at a profit. Shows cost, resale estimate, profit.
 - Sold-out boxes that would be profitable are watched silently (checked about every minute);
   RESTOCKED, BUY NOW arrives the moment one is buyable again.

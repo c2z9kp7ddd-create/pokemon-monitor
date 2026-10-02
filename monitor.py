@@ -61,6 +61,58 @@ def is_tcg(title, context=""):
 # "Cosmog 013/025", "SWSH123", "Mimikyu 075 ... Promo Cards": individual cards, not sealed product
 SINGLE_CARD = re.compile(r"\b\d{1,3}/\d{1,3}\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b", re.I)
 
+THIRTIETH = re.compile(r"\b30\s?th\b|\b30 years\b|\b30-year", re.I)
+
+def is_30th(title):
+    return bool(THIRTIETH.search(norm(title)))
+
+def msg_30th(it, deals_by_key):
+    """Short release message: cost, plus resale and profit when the listing could be valued."""
+    d = deals_by_key.get(it["key"])
+    line = f"Cost R{it['price']:,.0f}" if it.get("price") else "Price not shown"
+    if d:
+        line += f" | Resell ~R{d['value']:,.0f} | Profit ~R{d['profit']:,.0f} ({d['roi']:.0%})"
+    return f"{it['title']}\n{line}"
+
+def send_30th(events, deals, state):
+    """Every 30th Anniversary listing that becomes buyable gets its own message, any price."""
+    by_key = {d["key"]: d for d in deals}
+    sent = []
+    for kind, it in events:
+        if kind in ("NEW", "BACK IN STOCK") and it["in_stock"] and is_30th(it["title"]) and mine(it["store"]):
+            notify(f"30TH ANNIVERSARY IN STOCK: {it['store']}", msg_30th(it, by_key), priority=5, click=it["url"])
+            sent.append(it["key"])
+    if sent:
+        state["last_msg"] = time.time()
+    return set(sent)
+
+def current(i):
+    """Still listed (seen in the last day) and still passes today's product filter."""
+    seen = i.get("last_seen", "")
+    fresh = seen >= (dt.datetime.now() - dt.timedelta(days=1)).isoformat(timespec="seconds")
+    return fresh and is_tcg(i["title"])
+
+def snapshot_30th(state, deals):
+    """Once, after this feature first runs: what 30th Anniversary stock is buyable right now."""
+    if state.get("snapshot_30th_sent") or not IS_CLOUD:
+        return
+    by_key = {d["key"]: d for d in deals}
+    live = [i for i in state["items"].values()
+            if i["in_stock"] and is_30th(i["title"]) and mine(i["store"]) and current(i)]
+    live.sort(key=lambda i: (-(by_key.get(i["key"], {}).get("profit") or -1e9), i["price"] or 0))
+    lines = []
+    for i in live[:15]:
+        d = by_key.get(i["key"])
+        extra = f", profit ~R{d['profit']:,.0f}" if d else ""
+        lines.append(f'{html.escape(i["store"])} | R{i["price"]:,.0f}{extra}\n<a href="{html.escape(i["url"])}">{html.escape(i["title"])}</a>')
+    if len(live) > 15:
+        lines.append(f"...and {len(live) - 15} more")
+    notify(f"30th Anniversary: {len(live)} listings buyable now",
+           "\n".join(f"{i['store']}: {i['title']}" for i in live[:15]) or "None in stock right now.",
+           tg_html="\n\n".join(lines) or "None in stock right now. You'll get a message the moment one is.")
+    state["snapshot_30th_sent"] = True
+    state["last_msg"] = time.time()
+
 def is_hot(title):
     return has_any(norm(title), CONFIG["hot_words"])
 
@@ -250,10 +302,22 @@ def update_watchlist(deals, state):
     fresh = {d["key"]: d for d in deals if d["profitable"] and not d["in_stock"] and mine(d["store"])
              and STORE_BY_NAME.get(d["store"], {}).get("type") in ("shopify", "woo")}
     for k in list(watch):
-        if k not in fresh:
+        if k not in fresh and not (k in state["items"] and is_30th(state["items"][k]["title"])
+                                   and not state["items"][k]["in_stock"]):
             del watch[k]
-    for k, d in sorted(fresh.items(), key=lambda kv: -kv[1]["profit"])[:CONFIG["updates"]["max_watch"]]:
+    picked = sorted(fresh.items(), key=lambda kv: -kv[1]["profit"])[:CONFIG["updates"]["max_watch"]]
+    by_key = {d["key"]: d for d in deals}
+    thirtieth = [i for i in state["items"].values()
+                 if not i["in_stock"] and is_30th(i["title"]) and mine(i["store"]) and i["key"] not in fresh
+                 and current(i)
+                 and STORE_BY_NAME.get(i["store"], {}).get("type") in ("shopify", "woo")]
+    for k, d in picked:
         watch[k] = {f: d[f] for f in ("store", "title", "url", "price", "value", "profit", "roi")}
+        watch[k]["is30"] = is_30th(d["title"])
+    for i in thirtieth[:CONFIG["updates"]["max_watch_30th"]]:
+        d = by_key.get(i["key"], {})
+        watch[i["key"]] = {"store": i["store"], "title": i["title"], "url": i["url"], "price": i["price"],
+                           "value": d.get("value"), "is30": True}
 
 def poll_listing(w):
     """Live stock + price for one watched listing: (in_stock, price) or None if unknown."""
@@ -276,7 +340,7 @@ def watch_loop(state, until):
     if not watch:
         return
     cfg = CONFIG["resale"]
-    print(f"watching {len(watch)} sold-out profitable listings until {dt.datetime.fromtimestamp(until):%H:%M}")
+    print(f"watching {len(watch)} sold-out listings (profitable or 30th) until {dt.datetime.fromtimestamp(until):%H:%M}")
     while time.time() < until - 20 and watch:
         t0 = time.time()
         for key, w in list(watch.items()):
@@ -289,9 +353,16 @@ def watch_loop(state, until):
             if not res or not res[0]:
                 continue
             price = res[1] or w["price"]
-            profit = w["value"] * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"] - price - cfg["buy_shipping_rand"]
-            roi = profit / (price + cfg["buy_shipping_rand"])
-            if profit >= cfg["min_profit_rand"] and roi >= cfg["min_roi"]:
+            profit = roi = None
+            if w.get("value"):
+                profit = w["value"] * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"] - price - cfg["buy_shipping_rand"]
+                roi = profit / (price + cfg["buy_shipping_rand"])
+            if w.get("is30"):
+                d = {key: dict(w, price=price, profit=round(profit), roi=roi)} if profit is not None else {}
+                notify(f"30TH ANNIVERSARY IN STOCK: {w['store']}", msg_30th(dict(w, key=key, price=price), d),
+                       priority=5, click=w["url"])
+                state["last_msg"] = time.time()
+            elif profit is not None and profit >= cfg["min_profit_rand"] and roi >= cfg["min_roi"]:
                 notify(f"RESTOCKED, BUY NOW: {w['store']}",
                        deal_msg(dict(w, price=price, profit=round(profit), roi=roi)), priority=5, click=w["url"])
                 state.setdefault("alerted", {})[key] = {"price": price, "active": True}
@@ -404,6 +475,13 @@ def cloud_watchdog():
     gh = "/opt/homebrew/bin/gh"
     if IS_CLOUD or not os.path.exists(gh):
         return
+    try:  # changes committed while GitHub was unreachable (e.g. a firewalled network) go up once it's back
+        ahead = subprocess.run(["git", "rev-list", "--count", "@{u}..HEAD"], cwd=HERE,
+                               capture_output=True, text=True, timeout=15).stdout.strip()
+        if ahead not in ("", "0"):
+            subprocess.run(["git", "push", "-q"], cwd=HERE, capture_output=True, timeout=60)
+    except Exception as e:
+        print("auto push failed:", e, file=sys.stderr)
     try:
         out = subprocess.run([gh, "run", "list", "--workflow", "monitor.yml", "--limit", "5",
                               "--json", "status,createdAt"], cwd=HERE, capture_output=True, text=True, timeout=30)
@@ -502,9 +580,11 @@ def main():
     if "--dry-run" in args:
         return
     send_deals(deals, state)
-    update_watchlist(deals, state)
     if not seeding:
-        send_updates(events, state)
+        done = send_30th(events, deals, state)
+        snapshot_30th(state, deals)
+        send_updates([e for e in events if e[1]["key"] not in done], state)
+    update_watchlist(deals, state)
     heartbeat(state, results, deals)
     until = next((float(a.split("=", 1)[1]) for a in args if a.startswith("--watch-until=")), 0)
     if until:
