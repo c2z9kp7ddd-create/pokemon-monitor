@@ -68,17 +68,18 @@ THIRTIETH = re.compile(r"\b30\s?th\b|\b30 years\b|\b30-year", re.I)
 TWENTIETH = re.compile(r"\b20\s?th\b|\bxy\W*evolutions\b|(?<!prismatic )(?<!mega )\bevolutions\b|\bgenerations\b|\bcp6\b", re.I)
 BOX_OR_ETB = re.compile(r"booster (box|display)|elite trainer|\betb\b", re.I)
 
+# Gideon, 2026-10-05: alert only on English 30th Anniversary product (no 20th, no Japanese/Chinese etc.)
+NON_ENGLISH = re.compile(r"japanese|chinese|korean|thai|indonesian|simplified|traditional|\bjp\b|\bjpn\b|\bcn\b|\bchs\b|\bcht\b|\bm6a\b", re.I)
+
 def anniversary(title):
-    """'30TH' or '20TH' for the products Gideon wants alerts on, else None."""
+    """'30TH' for the products Gideon wants alerts on (English 30th Anniversary), else None."""
     t = norm(title)
-    if THIRTIETH.search(t):
+    if THIRTIETH.search(t) and not NON_ENGLISH.search(t):
         return "30TH"
-    if TWENTIETH.search(t) and BOX_OR_ETB.search(t) and not re.search(r"prismatic|mega evolution", t, re.I):
-        return "20TH"
     return None
 
 def is_30th(title):
-    """Wanted product (20th Anniversary box/ETB or any 30th Anniversary item)."""
+    """Wanted product (English 30th Anniversary item)."""
     return anniversary(title) is not None
 
 def msg_30th(it, deals_by_key):
@@ -125,7 +126,7 @@ def snapshot_30th(state, deals):
         lines.append(f'{html.escape(i["store"])} | R{i["price"]:,.0f}{extra}\n<a href="{html.escape(i["url"])}">{html.escape(i["title"])}</a>')
     if len(live) > 15:
         lines.append(f"...and {len(live) - 15} more")
-    notify(f"20th + 30th Anniversary: {len(live)} listings buyable now",
+    notify(f"English 30th Anniversary: {len(live)} listings buyable now",
            "\n".join(f"{i['store']}: {i['title']}" for i in live[:15]) or "None in stock right now.",
            tg_html="\n\n".join(lines) or "None in stock right now. You'll get a message the moment one is.")
     state["snapshot_30th_sent"] = True
@@ -530,15 +531,10 @@ def watch_loop(state, until):
             if w.get("value"):
                 profit = w["value"] * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"] - price - cfg["buy_shipping_rand"]
                 roi = profit / (price + cfg["buy_shipping_rand"])
-            if w.get("is30"):
+            if anniversary(w["title"]):
                 d = {key: dict(w, price=price, profit=round(profit), roi=roi)} if profit is not None else {}
                 notify(f"{anniversary(w['title'])} ANNIVERSARY IN STOCK: {w['store']}", msg_30th(dict(w, key=key, price=price), d),
                        priority=5, click=w["url"])
-                state["last_msg"] = time.time()
-            elif profit is not None and profit >= cfg["min_profit_rand"] and roi >= cfg["min_roi"]:
-                notify(f"RESTOCKED, BUY NOW: {w['store']}",
-                       deal_msg(dict(w, price=price, profit=round(profit), roi=roi)), priority=5, click=w["url"])
-                state.setdefault("alerted", {})[key] = {"price": price, "active": True}
                 state["last_msg"] = time.time()
             if key in state.get("items", {}):
                 state["items"][key].update(in_stock=True, price=price)
@@ -638,7 +634,7 @@ def heartbeat(state, results, deals):
     tracked = [i for i in state["items"].values() if is_30th(i["title"]) and current(i)]
     buyable = sum(i["in_stock"] for i in tracked)
     notify("Pokemon monitor: still watching",
-           f"{len(results)} stores checked. Tracking {len(tracked)} 20th/30th Anniversary listings, "
+           f"{len(results)} stores checked. Tracking {len(tracked)} English 30th Anniversary listings, "
            f"{buyable} buyable. You'll get a message the moment another one is.")
     state["last_msg"] = time.time()
 
@@ -664,7 +660,7 @@ def cloud_watchdog():
         stale = last is None or dt.datetime.now(dt.timezone.utc) - last > dt.timedelta(minutes=30)
         done = [r for r in runs if r["status"] == "completed"][:3]
         flag = HERE / ".cloud_warned"
-        if len(done) == 3 and all(r.get("conclusion") != "success" for r in done):
+        if len(done) == 3 and all(r.get("conclusion") != "success" for r in done) and CONFIG["updates"].get("status_messages"):
             if not flag.exists():
                 notify("Pokemon monitor problem", "The last 3 cloud runs did not finish. Alerts may be missed until this is fixed.")
                 flag.write_text("1")
@@ -679,6 +675,8 @@ def cloud_watchdog():
 def check_health(state, results, skipped=()):
     """One message if most stores have failed for about an hour, one when it recovers,
     so silence on Telegram always means 'no deals', never 'monitor broken'."""
+    if not CONFIG["updates"].get("status_messages"):
+        return
     n = len(active_stores())
     bad = len(results) + len(skipped) < n / 2
     state["bad_runs"] = state.get("bad_runs", 0) + 1 if bad else 0
@@ -700,7 +698,7 @@ def main():
     if "--dry-run" not in args:
         cloud_watchdog()
     if "--test" in args:
-        notify("Pokemon monitor connected", "Test alert. You will only get messages when a box looks profitable.", 5)
+        notify("Pokemon monitor connected", "Test alert. You will only get messages about English 30th Anniversary products.", 5)
         print("test sent")
         return
 

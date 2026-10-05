@@ -281,13 +281,14 @@
     "new_listings": true,
     "restocks": true,
     "price_drop_pct": 10,
-    "heartbeat_hours": 6,
+    "heartbeat_hours": 0,
     "max_watch": 40,
-    "max_watch_30th": 80
+    "max_watch_30th": 80,
+    "status_messages": false
   },
   "scan_budget_seconds": 420,
   "shopify_rescan_minutes": 25,
   "cooldown_minutes": 30,
   "quick_scan_seconds": 60,
-  "full_scan_seconds": 600
+  "full_scan_seconds": 300
 }
