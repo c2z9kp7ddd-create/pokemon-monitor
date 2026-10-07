@@ -287,7 +287,8 @@
     "heartbeat_hours": 0,
     "max_watch": 40,
     "max_watch_30th": 200,
-    "status_messages": false
+    "status_messages": false,
+    "minute_status": true
   },
   "scan_budget_seconds": 420,
   "shopify_rescan_minutes": 4,

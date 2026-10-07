@@ -287,8 +287,9 @@ SCANNERS = {"shopify": scan_shopify, "woo": scan_woo,
 
 SECRETS_FILE = HERE / "secrets.json"  # telegram / discord credentials, written by setup_phone.py
 
-def notify(title, message, priority=3, click=None, tg_html=None):
-    """Send to every channel that is set up: Telegram, Discord, and ntfy if enabled."""
+def notify(title, message, priority=3, click=None, tg_html=None, silent=False):
+    """Send to every channel that is set up: Telegram, Discord, and ntfy if enabled.
+    silent: Telegram delivers without sound (used for the every-minute status)."""
     sec = json.loads(SECRETS_FILE.read_text()) if SECRETS_FILE.exists() else {}
     if os.environ.get("TELEGRAM_TOKEN"):  # cloud run: credentials come from GitHub secrets
         sec["telegram"] = {"token": os.environ["TELEGRAM_TOKEN"], "chat_id": os.environ.get("TELEGRAM_CHAT_ID")}
@@ -309,7 +310,7 @@ def notify(title, message, priority=3, click=None, tg_html=None):
             text += f'\n\n<a href="{html.escape(click)}">Open product</a>'
         sends.append(("telegram", f"https://api.telegram.org/bot{tg['token']}/sendMessage",
                       {"chat_id": tg["chat_id"], "text": text, "parse_mode": "HTML",
-                       "disable_web_page_preview": bool(tg_html)}))
+                       "disable_web_page_preview": bool(tg_html), "disable_notification": silent}))
     if sec.get("discord_webhook"):
         content = f"**{title}**\n{message}" + (f"\n{click}" if click else "")
         sends.append(("discord", sec["discord_webhook"], {"content": content[:1990]}))
@@ -491,6 +492,21 @@ def quick_scan(state):
     for k in sent:
         state.get("watch", {}).pop(k, None)
     print(f"quick scan {now[11:16]}: {len(stores)} stores, {len(events)} changes, {len(sent)} alerts")
+    return len(done)
+
+def minute_status(state, stores_checked, polled):
+    """Cloud only (Gideon, 2026-10-07): a silent Telegram status every minute; in-stock alerts stay loud."""
+    if not (IS_CLOUD and CONFIG["updates"].get("minute_status")):
+        return
+    live = sorted((i for i in state["items"].values()
+                   if i["in_stock"] and is_30th(i["title"]) and current(i) and i["store"] in STORE_BY_NAME),
+                  key=lambda i: i["price"] or 0)
+    lines = [f"{dt.datetime.now(dt.timezone(dt.timedelta(hours=2))):%H:%M}: {stores_checked} stores and "
+             f"{polled} sold-out listings checked. English 30th buyable now: {len(live)}"]
+    lines += [f"{i['store']} | R{i['price']:,.0f} | {i['title'][:60]}" for i in live[:5]]
+    if len(live) > 5:
+        lines.append(f"...and {len(live) - 5} more")
+    notify("Pokemon check", "\n".join(lines), priority=1, silent=True)
 
 def _safe_poll(w, cool):
     try:
@@ -510,10 +526,11 @@ def watch_loop(state, until):
     last_quick = 0  # first quick scan straight away
     while time.time() < until - 20:
         t0 = time.time()
+        checked = 0
         if CONFIG["quick_scan_seconds"] and t0 - last_quick >= CONFIG["quick_scan_seconds"] - 5:
             last_quick = t0  # measured from the start, so checks stay on a steady 1-minute beat
             try:
-                quick_scan(state)
+                checked = quick_scan(state)
             except Exception as e:
                 print("quick scan failed:", e, file=sys.stderr)
         cool = state.setdefault("cooldown", {})
@@ -539,6 +556,7 @@ def watch_loop(state, until):
             if key in state.get("items", {}):
                 state["items"][key].update(in_stock=True, price=price)
             del watch[key]
+        minute_status(state, checked, len(due))
         time.sleep(max(5, 60 - (time.time() - t0)))
 
 # ---------------------------------------------------------------- dashboard
