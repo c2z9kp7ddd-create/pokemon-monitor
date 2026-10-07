@@ -18,7 +18,7 @@ How profit is estimated (settings under "resale" in config.json)
 - Minus 12% selling fees, R120 postage out, R100 postage in; alert if profit >= R300 and >= 25%
 Estimates, not guarantees.
 
-Stores that block cloud servers ("local_only_stores") are scanned by the Mac (launchd, every 10 min when awake).
+Stores that block cloud servers ("local_only_stores") are scanned by the Mac (launchd, every 5 min when awake).
 The Mac also restarts the cloud chain if it has stalled for 30 minutes.
 
     python3 monitor.py --dry-run     # scan + valuation, print only

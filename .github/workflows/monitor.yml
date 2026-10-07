@@ -2,7 +2,7 @@ name: pokemon-monitor
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # GitHub may start runs a few minutes late at busy times
+    - cron: "*/5 * * * *"   # GitHub may start runs a few minutes late at busy times
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +16,7 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - run: echo "START=$(date +%s)" >> "$GITHUB_ENV"
 
@@ -35,7 +35,7 @@ jobs:
 
       # full scan, then watch sold-out profitable boxes every minute until the next run takes over
       - name: Scan stores, send alerts, watch restocks
-        run: python monitor.py --watch-until=$(( START + 560 ))
+        run: python monitor.py --watch-until=$(( START + 270 ))
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -57,13 +57,13 @@ jobs:
           fi
 
       # GitHub's cron is unreliable (runs late or not at all), so each run books the next one
-      # roughly 10 minutes after it started. The cron above stays as a backup.
+      # roughly 5 minutes after it started. The cron above stays as a backup.
       - name: Queue next run
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          wait=$(( 570 - ($(date +%s) - START) ))
+          wait=$(( 285 - ($(date +%s) - START) ))
           [ $wait -gt 0 ] && sleep $wait
           others=$(gh run list --workflow monitor.yml --limit 10 --json databaseId,status \
             --jq "[.[] | select(.databaseId != ${{ github.run_id }} and .status != \"completed\")] | length")

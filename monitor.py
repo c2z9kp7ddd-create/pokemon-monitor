@@ -806,7 +806,7 @@ def main():
         os._exit(0)
 
 def run_forever():
-    """Server mode: a full scan every 10 minutes, quick scans and stock checks in between."""
+    """Server mode: a full scan every full_scan_seconds (5 minutes), quick scans and stock checks in between."""
     while True:
         start = time.time()
         sys.argv = [sys.argv[0], f"--watch-until={start + CONFIG['full_scan_seconds']}"]

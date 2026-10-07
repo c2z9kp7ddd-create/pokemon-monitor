@@ -242,12 +242,6 @@
       "type": "shopify",
       "url": "https://www.zatu.com/collections/pokemon",
       "currency": "GBP"
-    },
-    {
-      "name": "PokeNinJapan (Japan)",
-      "type": "shopify",
-      "url": "https://www.pokeninjapan.store/collections/pokemon-card-30th-celebration-product",
-      "currency": "JPY"
     }
   ],
   "resale": {
@@ -274,7 +268,6 @@
     "Marvellous Hobbies",
     "Mithril Vault",
     "Nintendo Store SA",
-    "PokeNinJapan (Japan)",
     "PokePlugZA",
     "Pops Toys",
     "Readers Warehouse",
@@ -293,11 +286,11 @@
     "price_drop_pct": 10,
     "heartbeat_hours": 0,
     "max_watch": 40,
-    "max_watch_30th": 80,
+    "max_watch_30th": 200,
     "status_messages": false
   },
   "scan_budget_seconds": 420,
-  "shopify_rescan_minutes": 25,
+  "shopify_rescan_minutes": 4,
   "cooldown_minutes": 30,
   "quick_scan_seconds": 60,
   "full_scan_seconds": 300
