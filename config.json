@@ -295,7 +295,7 @@
     "price_drop_pct": 10,
     "heartbeat_hours": 0,
     "max_watch": 40,
-    "max_watch_30th": 200,
+    "max_watch_30th": 250,
     "status_messages": false,
     "minute_status": false
   },

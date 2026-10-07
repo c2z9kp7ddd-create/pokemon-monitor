@@ -443,7 +443,9 @@ def update_watchlist(deals, state):
     thirtieth = [i for i in state["items"].values()
                  if not i["in_stock"] and is_30th(i["title"]) and mine(i["store"]) and i["key"] not in fresh
                  and current(i)
-                 and STORE_BY_NAME.get(i["store"], {}).get("type") in ("shopify", "woo")]
+                 and STORE_BY_NAME.get(i["store"], {}).get("type") == "shopify"
+                 # older ETBs abroad are never valued (no shipping/import in their price), so can't alert
+                 and not (anniversary(i["title"]) == "ETB" and STORE_BY_NAME[i["store"]].get("currency"))]
     for k, d in picked:
         watch[k] = {f: d[f] for f in ("store", "title", "url", "price", "value", "profit", "roi")}
         watch[k]["is30"] = is_30th(d["title"])
@@ -469,6 +471,7 @@ def poll_listing(w):
     return None
 
 LAST_DEALS = []  # valuations from the latest full scan, reused by quick scans
+WANTED_TERMS = ("30th", "delta reign", "elite trainer")  # WooCommerce quick searches covering every wanted listing
 
 def quick_fetch(st):
     """Cheap 'what changed' request per store: newest listings only."""
@@ -484,10 +487,16 @@ def quick_fetch(st):
                                 vs[0].get("price"), any(v.get("available") for v in vs)))
         return out
     if kind == "woo":
-        prods = []
-        for term in st.get("search", ["pokemon"]):
-            prods += get_json(f"{base}/wp-json/wc/store/v1/products?search={urllib.parse.quote(term)}&orderby=date&order=desc&per_page=30",
-                              tries=1, timeout=st.get("timeout", 25))
+        prods, seen = [], set()
+        urls = [f"{base}/wp-json/wc/store/v1/products?search={urllib.parse.quote(t)}&orderby=date&order=desc&per_page=30"
+                for t in st.get("search", ["pokemon"])]
+        # every wanted listing's stock in one request per term, so restocks show up within a minute
+        urls += [f"{base}/wp-json/wc/store/v1/products?search={urllib.parse.quote(t)}&per_page=100" for t in WANTED_TERMS]
+        for u in urls:
+            for p in get_json(u, tries=1, timeout=st.get("timeout", 25)):
+                if p["id"] not in seen:
+                    seen.add(p["id"])
+                    prods.append(p)
         out = []
         for p in prods:
             if is_tcg(p["name"]):
