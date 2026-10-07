@@ -503,10 +503,14 @@ def minute_status(state, stores_checked, polled):
                   key=lambda i: i["price"] or 0)
     lines = [f"{dt.datetime.now(dt.timezone(dt.timedelta(hours=2))):%H:%M}: {stores_checked} stores and "
              f"{polled} sold-out listings checked. English 30th buyable now: {len(live)}"]
-    lines += [f"{i['store']} | R{i['price']:,.0f} | {i['title'][:60]}" for i in live[:5]]
-    if len(live) > 5:
-        lines.append(f"...and {len(live) - 5} more")
-    notify("Pokemon check", "\n".join(lines), priority=1, silent=True)
+    rows = [(f"{i['store']} | R{i['price']:,.0f}" if i.get("price") else i["store"], i) for i in live[:10]]
+    lines += [f"{head} | {i['title'][:60]} {i['url']}" for head, i in rows]
+    links = [html.escape(lines[0])] + [f'{html.escape(head)}\n<a href="{html.escape(i["url"])}">{html.escape(i["title"][:80])}</a>'
+                                       for head, i in rows]
+    if len(live) > 10:
+        lines.append(f"...and {len(live) - 10} more")
+        links.append(f"...and {len(live) - 10} more")
+    notify("Pokemon check", "\n".join(lines), priority=1, silent=True, tg_html="\n\n".join(links))
 
 def _safe_poll(w, cool):
     try:
