@@ -629,9 +629,10 @@ def probe_local_only():
         except Exception as e:
             return st["name"], f"fail: {str(e)[:60]}"
     stores = [s for s in CONFIG["stores"] if s["name"] in set(CONFIG.get("local_only_stores", []))]
-    with cf.ThreadPoolExecutor(max_workers=8) as ex:
-        for name, res in ex.map(one, stores):
-            print(f"probe {name}: {res}")
+    for st in stores:  # one at a time, so a burst of requests doesn't trigger rate limits by itself
+        name, res = one(st)
+        print(f"probe {name}: {res}")
+        time.sleep(3)
 
 def mine(store):
     """Cloud reports every store it scans; the Mac only reports the stores the cloud can't reach."""
