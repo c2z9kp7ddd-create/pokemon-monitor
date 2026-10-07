@@ -90,10 +90,34 @@ def is_30th(title):
     """Wanted product (English 30th Anniversary or Delta Reign item)."""
     return anniversary(title) is not None
 
-def msg_30th(it, deals_by_key):
+def retail_ref(title):
+    """Normal SA shelf price (rand) for this kind of product, from config retail_refs_rand (first match wins)."""
+    t = norm(title).lower()
+    for pattern, rand in CONFIG.get("retail_refs_rand", []):
+        if re.search(pattern, t):
+            return rand
+    return None
+
+def price_check(it, value=None):
+    """Gideon, 2026-10-07: alert only at retail price or below collector value.
+    Returns a short reason to alert, or None to stay quiet."""
+    price, ref = it.get("price"), retail_ref(it["title"])
+    if price is None:
+        return "price not shown"
+    if ref and price <= ref * (1 + CONFIG.get("retail_tolerance", 0.15)):
+        return f"retail (SA shelf price ~R{ref:,.0f})"
+    if value and price < value:
+        return f"below collector value ~R{value:,.0f}"
+    if not ref and not value:
+        return "no retail or collector price to compare"
+    return None
+
+def msg_30th(it, deals_by_key, why=None):
     """Short release message: cost, plus resale and profit when the listing could be valued."""
     d = deals_by_key.get(it["key"])
     line = f"Cost R{it['price']:,.0f}" if it.get("price") else "Price not shown"
+    if why:
+        line += f" | {why}"
     if it.get("orig"):
         line += f" ({it['orig']}) + international shipping and SA import VAT"
     if d:
@@ -106,7 +130,11 @@ def send_30th(events, deals, state):
     sent = []
     for kind, it in events:
         if kind in ("NEW", "BACK IN STOCK") and it["in_stock"] and is_30th(it["title"]) and mine(it["store"]):
-            notify(f"{anniversary(it['title'])} IN STOCK / PRE-ORDER: {it['store']}", msg_30th(it, by_key),
+            why = price_check(it, (by_key.get(it["key"]) or {}).get("value"))
+            if not why:
+                print(f"skipped (above retail and collector value): {it['store']}: {it['title']} R{it['price']}")
+                continue
+            notify(f"{anniversary(it['title'])} IN STOCK / PRE-ORDER: {it['store']}", msg_30th(it, by_key, why),
                    priority=5, click=it["url"])
             sent.append(it["key"])
     if sent:
@@ -569,9 +597,10 @@ def watch_loop(state, until):
             if w.get("value"):
                 profit = w["value"] * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"] - price - cfg["buy_shipping_rand"]
                 roi = profit / (price + cfg["buy_shipping_rand"])
-            if anniversary(w["title"]):
+            why = anniversary(w["title"]) and price_check(dict(w, price=price), w.get("value"))
+            if why:
                 d = {key: dict(w, price=price, profit=round(profit), roi=roi)} if profit is not None else {}
-                notify(f"{anniversary(w['title'])} IN STOCK / PRE-ORDER: {w['store']}", msg_30th(dict(w, key=key, price=price), d),
+                notify(f"{anniversary(w['title'])} IN STOCK / PRE-ORDER: {w['store']}", msg_30th(dict(w, key=key, price=price), d, why),
                        priority=5, click=w["url"])
                 state["last_msg"] = time.time()
             if key in state.get("items", {}):
@@ -658,7 +687,8 @@ def send_updates(events, state):
     cfg = CONFIG["updates"]
     wanted = {"NEW": cfg["new_listings"], "BACK IN STOCK": cfg["restocks"], "PRICE DROP": True}
     events = [(k, it) for k, it in events
-              if k == "PRICE DROP" and it["in_stock"] and mine(it["store"]) and is_30th(it["title"])]
+              if k == "PRICE DROP" and it["in_stock"] and mine(it["store"]) and is_30th(it["title"])
+              and price_check(it, next((d["value"] for d in LAST_DEALS if d["key"] == it["key"]), None))]
     if not events:
         return
     events.sort(key=lambda e: (not is_hot(e[1]["title"]), e[0]))

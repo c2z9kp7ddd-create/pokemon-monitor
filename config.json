@@ -300,5 +300,84 @@
   "cooldown_minutes": 30,
   "quick_scan_seconds": 60,
   "full_scan_seconds": 300,
-  "probe_local_only": true
+  "probe_local_only": true,
+  "retail_tolerance": 0.15,
+  "retail_refs_rand": [
+    [
+      "pokemon center elite trainer|pokemon center etb",
+      2000
+    ],
+    [
+      "ultra.?premium|\\bupc\\b",
+      4999
+    ],
+    [
+      "booster box|booster display|36 packs",
+      3999
+    ],
+    [
+      "elite trainer|\\betb\\b",
+      1299
+    ],
+    [
+      "binder collection",
+      999
+    ],
+    [
+      "figure collection",
+      950
+    ],
+    [
+      "premium collection",
+      1150
+    ],
+    [
+      "booster bundle",
+      699
+    ],
+    [
+      "poster collection",
+      599
+    ],
+    [
+      "mini tin",
+      299
+    ],
+    [
+      "ex box|ex tin|\\btin\\b",
+      599
+    ],
+    [
+      "tech sticker",
+      499
+    ],
+    [
+      "knock out collection",
+      399
+    ],
+    [
+      "battle deck",
+      399
+    ],
+    [
+      "3.?pack blister|blister 3.?pack|3pack",
+      399
+    ],
+    [
+      "2.?pack blister",
+      299
+    ],
+    [
+      "premium blister|blister",
+      180
+    ],
+    [
+      "sleeved booster",
+      120
+    ],
+    [
+      "booster pack|booster(?! box| bundle)",
+      120
+    ]
+  ]
 }
