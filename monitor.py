@@ -55,7 +55,7 @@ def is_tcg(title, context=""):
     """context: store metadata (Shopify vendor/product type) that can say 'Pokemon' when the title doesn't."""
     t = norm(title)
     # some shops drop "Pokemon" from titles ("30th Celebration Elite Trainer Box", "Mega Evolution: ...")
-    return (has_any(t + " " + norm(context), ["pokemon", "30th celebration", "mega evolution"])
+    return (has_any(t + " " + norm(context), ["pokemon", "30th celebration", "mega evolution", "delta reign"])
             and has_any(t, CONFIG["tcg_words"])
             and not has_any(t, CONFIG["exclude_words"])
             and not SINGLE_CARD.search(t))
@@ -73,15 +73,21 @@ BOX_OR_ETB = re.compile(r"booster (box|display)|elite trainer|\betb\b", re.I)
 # Gideon, 2026-10-05: alert only on English 30th Anniversary product (no 20th, no Japanese/Chinese etc.)
 NON_ENGLISH = re.compile(r"japanese|chinese|korean|thai|indonesian|simplified|traditional|\bjp\b|\bjpn\b|\bcn\b|\bchs\b|\bcht\b|\bm6a\b", re.I)
 
+DELTA_REIGN = re.compile(r"\bdelta reign\b", re.I)  # Gideon, 2026-10-07: Delta Reign pre-orders too
+
 def anniversary(title):
-    """'30TH' for the products Gideon wants alerts on (English 30th Anniversary), else None."""
+    """Label for the products Gideon wants alerts on (English 30th Anniversary or Delta Reign), else None."""
     t = norm(title)
-    if THIRTIETH.search(t) and not NON_ENGLISH.search(t):
-        return "30TH"
+    if NON_ENGLISH.search(t):
+        return None
+    if THIRTIETH.search(t):
+        return "30TH ANNIVERSARY"
+    if DELTA_REIGN.search(t):
+        return "DELTA REIGN"
     return None
 
 def is_30th(title):
-    """Wanted product (English 30th Anniversary item)."""
+    """Wanted product (English 30th Anniversary or Delta Reign item)."""
     return anniversary(title) is not None
 
 def msg_30th(it, deals_by_key):
@@ -100,7 +106,7 @@ def send_30th(events, deals, state):
     sent = []
     for kind, it in events:
         if kind in ("NEW", "BACK IN STOCK") and it["in_stock"] and is_30th(it["title"]) and mine(it["store"]):
-            notify(f"{anniversary(it['title'])} ANNIVERSARY IN STOCK: {it['store']}", msg_30th(it, by_key),
+            notify(f"{anniversary(it['title'])} IN STOCK / PRE-ORDER: {it['store']}", msg_30th(it, by_key),
                    priority=5, click=it["url"])
             sent.append(it["key"])
     if sent:
@@ -200,21 +206,28 @@ def _scan_shopify(store, base, max_pages):
     return out
 
 def scan_woo(store, base, max_pages=30):
+    out, seen = [], set()
+    timeout = STORE_BY_NAME.get(store, {}).get("timeout", 25)  # some shops are just slow
+    for term in STORE_BY_NAME.get(store, {}).get("search", ["pokemon"]):
+        for page in range(1, max_pages + 1):
+            check_deadline()
+            prods = get_json(f"{base}/wp-json/wc/store/v1/products?search={urllib.parse.quote(term)}&per_page=100&page={page}",
+                             timeout=timeout)
+            out += _woo_items(store, [p for p in prods if p["id"] not in seen])
+            seen.update(p["id"] for p in prods)
+            if len(prods) < 100:
+                break
+    return out
+
+def _woo_items(store, prods):
     out = []
-    for page in range(1, max_pages + 1):
-        check_deadline()
-        timeout = STORE_BY_NAME.get(store, {}).get("timeout", 25)  # some shops are just slow
-        prods = get_json(f"{base}/wp-json/wc/store/v1/products?search=pokemon&per_page=100&page={page}",
-                         timeout=timeout)
-        for p in prods:
-            if not is_tcg(p["name"]):
-                continue
-            pr = p.get("prices") or {}
-            price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
-            out.append(item(store, p["id"], p["name"], p["permalink"], price,
-                            p.get("is_in_stock") or p.get("is_on_backorder")))
-        if len(prods) < 100:
-            break
+    for p in prods:
+        if not is_tcg(p["name"]):
+            continue
+        pr = p.get("prices") or {}
+        price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
+        out.append(item(store, p["id"], p["name"], p["permalink"], price,
+                        p.get("is_in_stock") or p.get("is_on_backorder")))
     return out
 
 def scan_takealot(store, _base, max_pages=40):
@@ -430,8 +443,10 @@ def quick_fetch(st):
                                 vs[0].get("price"), any(v.get("available") for v in vs)))
         return out
     if kind == "woo":
-        prods = get_json(f"{base}/wp-json/wc/store/v1/products?search=pokemon&orderby=date&order=desc&per_page=30",
-                         tries=1, timeout=st.get("timeout", 25))
+        prods = []
+        for term in st.get("search", ["pokemon"]):
+            prods += get_json(f"{base}/wp-json/wc/store/v1/products?search={urllib.parse.quote(term)}&orderby=date&order=desc&per_page=30",
+                              tries=1, timeout=st.get("timeout", 25))
         out = []
         for p in prods:
             if is_tcg(p["name"]):
@@ -442,7 +457,7 @@ def quick_fetch(st):
         return out
     if kind == "takealot":  # targeted searches instead of the whole Pokemon catalogue
         out = []
-        for q in ("pokemon 30th", "pokemon evolutions elite trainer", "pokemon generations elite trainer"):
+        for q in ("pokemon 30th", "pokemon 30th celebration", "pokemon delta reign"):
             d = get_json("https://api.takealot.com/rest/v-1-12-0/searches/products?" + urllib.parse.urlencode({"qsearch": q}), tries=1)
             for r in d["sections"]["products"].get("results", []):
                 pv, core = r["product_views"], r["product_views"]["core"]
@@ -556,7 +571,7 @@ def watch_loop(state, until):
                 roi = profit / (price + cfg["buy_shipping_rand"])
             if anniversary(w["title"]):
                 d = {key: dict(w, price=price, profit=round(profit), roi=roi)} if profit is not None else {}
-                notify(f"{anniversary(w['title'])} ANNIVERSARY IN STOCK: {w['store']}", msg_30th(dict(w, key=key, price=price), d),
+                notify(f"{anniversary(w['title'])} IN STOCK / PRE-ORDER: {w['store']}", msg_30th(dict(w, key=key, price=price), d),
                        priority=5, click=w["url"])
                 state["last_msg"] = time.time()
             if key in state.get("items", {}):

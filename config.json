@@ -54,7 +54,6 @@
     "socks",
     "cap ",
     "sleeves",
-    "sleeve",
     "playmat",
     "deck box",
     "toploader",
@@ -77,7 +76,8 @@
     "figure blind",
     "wheel spin",
     "rip n ship",
-    "mystery spin"
+    "mystery spin",
+    "sleeve "
   ],
   "stores": [
     {
@@ -230,6 +230,17 @@
       "name": "Weebforce",
       "type": "shopify",
       "url": "https://www.weebforce.co.za"
+    },
+    {
+      "name": "Silver Toy Shop",
+      "type": "woo",
+      "url": "https://www.silvertoyshop.co.za",
+      "search": [
+        "pokemon",
+        "delta reign",
+        "30th celebration",
+        "mega evolution"
+      ]
     },
     {
       "name": "Total Cards (UK)",
