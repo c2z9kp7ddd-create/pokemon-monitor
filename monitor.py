@@ -74,6 +74,7 @@ BOX_OR_ETB = re.compile(r"booster (box|display)|elite trainer|\betb\b", re.I)
 NON_ENGLISH = re.compile(r"japanese|chinese|korean|thai|indonesian|simplified|traditional|\bjp\b|\bjpn\b|\bcn\b|\bchs\b|\bcht\b|\bm6a\b", re.I)
 
 DELTA_REIGN = re.compile(r"\bdelta reign\b", re.I)  # Gideon, 2026-10-07: Delta Reign pre-orders too
+ETB = re.compile(r"elite trainer|\betb\b", re.I)  # Gideon, 2026-10-07: older ETBs, only below collector value
 
 def anniversary(title):
     """Label for the products Gideon wants alerts on (English 30th Anniversary or Delta Reign), else None."""
@@ -84,10 +85,18 @@ def anniversary(title):
         return "30TH ANNIVERSARY"
     if DELTA_REIGN.search(t):
         return "DELTA REIGN"
+    if ETB.search(t):
+        return "ETB"
     return None
 
+def alert_title(title, store):
+    label = anniversary(title)
+    if label == "ETB":
+        return f"ETB BELOW COLLECTOR VALUE: {store}"
+    return f"{label} IN STOCK / PRE-ORDER: {store}"
+
 def is_30th(title):
-    """Wanted product (English 30th Anniversary or Delta Reign item)."""
+    """Wanted product (English 30th Anniversary, Delta Reign, or any English ETB)."""
     return anniversary(title) is not None
 
 def retail_ref(title):
@@ -102,6 +111,8 @@ def price_check(it, value=None):
     """Gideon, 2026-10-07: alert only at retail price or below collector value.
     Returns a short reason to alert, or None to stay quiet."""
     price, ref = it.get("price"), retail_ref(it["title"])
+    if anniversary(it["title"]) == "ETB":  # older sets: collector value is the only test
+        return f"below collector value ~R{value:,.0f}" if value and price is not None and price < value else None
     if price is None:
         return "price not shown"
     if ref and price <= ref * (1 + CONFIG.get("retail_tolerance", 0.15)):
@@ -134,7 +145,7 @@ def send_30th(events, deals, state):
             if not why:
                 print(f"skipped (above retail and collector value): {it['store']}: {it['title']} R{it['price']}")
                 continue
-            notify(f"{anniversary(it['title'])} IN STOCK / PRE-ORDER: {it['store']}", msg_30th(it, by_key, why),
+            notify(alert_title(it["title"], it["store"]), msg_30th(it, by_key, why),
                    priority=5, click=it["url"])
             sent.append(it["key"])
     if sent:
@@ -436,6 +447,7 @@ def update_watchlist(deals, state):
     for k, d in picked:
         watch[k] = {f: d[f] for f in ("store", "title", "url", "price", "value", "profit", "roi")}
         watch[k]["is30"] = is_30th(d["title"])
+    thirtieth.sort(key=lambda i: anniversary(i["title"]) == "ETB")
     for i in thirtieth[:CONFIG["updates"]["max_watch_30th"]]:
         d = by_key.get(i["key"], {})
         watch[i["key"]] = {"store": i["store"], "title": i["title"], "url": i["url"], "price": i["price"],
@@ -600,7 +612,7 @@ def watch_loop(state, until):
             why = anniversary(w["title"]) and price_check(dict(w, price=price), w.get("value"))
             if why:
                 d = {key: dict(w, price=price, profit=round(profit), roi=roi)} if profit is not None else {}
-                notify(f"{anniversary(w['title'])} IN STOCK / PRE-ORDER: {w['store']}", msg_30th(dict(w, key=key, price=price), d, why),
+                notify(alert_title(w["title"], w["store"]), msg_30th(dict(w, key=key, price=price), d, why),
                        priority=5, click=w["url"])
                 state["last_msg"] = time.time()
             if key in state.get("items", {}):
