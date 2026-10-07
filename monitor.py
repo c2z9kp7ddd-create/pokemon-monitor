@@ -54,12 +54,14 @@ def has_any(text, words):
 def is_tcg(title, context=""):
     """context: store metadata (Shopify vendor/product type) that can say 'Pokemon' when the title doesn't."""
     t = norm(title)
-    return (has_any(t + " " + norm(context), ["pokemon"]) and has_any(t, CONFIG["tcg_words"])
+    # some shops drop "Pokemon" from titles ("30th Celebration Elite Trainer Box", "Mega Evolution: ...")
+    return (has_any(t + " " + norm(context), ["pokemon", "30th celebration", "mega evolution"])
+            and has_any(t, CONFIG["tcg_words"])
             and not has_any(t, CONFIG["exclude_words"])
             and not SINGLE_CARD.search(t))
 
 # "Cosmog 013/025", "SWSH123", "Mimikyu 075 ... Promo Cards": individual cards, not sealed product
-SINGLE_CARD = re.compile(r"\b\d{1,3}/\d{1,3}|\bbasic \w+ energy\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b", re.I)
+SINGLE_CARD = re.compile(r"\[mega evolution[^\]]*\]|\b\d{1,3}/\d{1,3}|\bbasic \w+ energy\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b", re.I)
 
 THIRTIETH = re.compile(r"\b30\s?th\b|\b30 years\b|\b30-year", re.I)
 
@@ -619,6 +621,18 @@ def active_stores():
     local_only = set(CONFIG.get("local_only_stores", []))
     return [s for s in CONFIG["stores"] if not (IS_GITHUB and s["name"] in local_only)]
 
+def probe_local_only():
+    """Log which Mac-only stores the cloud can reach now, so they can move to the cloud."""
+    def one(st):
+        try:
+            return st["name"], f"ok ({len(quick_fetch(st))} TCG items)"
+        except Exception as e:
+            return st["name"], f"fail: {str(e)[:60]}"
+    stores = [s for s in CONFIG["stores"] if s["name"] in set(CONFIG.get("local_only_stores", []))]
+    with cf.ThreadPoolExecutor(max_workers=8) as ex:
+        for name, res in ex.map(one, stores):
+            print(f"probe {name}: {res}")
+
 def mine(store):
     """Cloud reports every store it scans; the Mac only reports the stores the cloud can't reach."""
     return IS_CLOUD or store in set(CONFIG.get("local_only_stores", []))
@@ -744,6 +758,8 @@ def main():
             skipped.append(n)  # full Shopify catalogues are heavy; rescan each one every N minutes
         else:
             todo.append(st)
+    if IS_GITHUB and CONFIG.get("probe_local_only"):
+        probe_local_only()
     SCAN_DEADLINE[0] = time.time() + CONFIG["scan_budget_seconds"]
     ex = cf.ThreadPoolExecutor(max_workers=8)
     futs = {ex.submit(SCANNERS[s["type"]], s["name"], s["url"]): s["name"] for s in todo}
