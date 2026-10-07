@@ -278,10 +278,14 @@
     "Level Up Store",
     "Marvellous Hobbies",
     "Mithril Vault",
+    "Nintendo Store SA",
     "PokePlugZA",
     "Pops Toys",
+    "Readers Warehouse",
+    "Sword and Board",
     "Total Cards (UK)",
     "Toy Kingdom",
+    "Vitika Imports",
     "WZRD TCG",
     "Zatu (UK)"
   ],
@@ -300,7 +304,7 @@
   "cooldown_minutes": 30,
   "quick_scan_seconds": 60,
   "full_scan_seconds": 300,
-  "probe_local_only": true,
+  "probe_local_only": false,
   "retail_tolerance": 0.15,
   "retail_refs_rand": [
     [
