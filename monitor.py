@@ -474,7 +474,8 @@ def quick_fetch(st):
     """Cheap 'what changed' request per store: newest listings only."""
     name, base, kind = st["name"], st["url"], st["type"]
     if kind == "shopify":
-        prods = get_json(f"{base}/products.json?limit=50", tries=1).get("products", [])
+        # a collection URL is already narrowed to Pokemon, so read all of it (it isn't sorted newest first)
+        prods = get_json(f"{base}/products.json?limit={250 if '/collections/' in base else 50}", tries=1).get("products", [])
         out = []
         for p in prods:
             if is_tcg(p["title"], f'{p.get("vendor", "")} {p.get("product_type", "")}'):
