@@ -74,7 +74,9 @@ BOX_OR_ETB = re.compile(r"booster (box|display)|elite trainer|\betb\b", re.I)
 NON_ENGLISH = re.compile(r"japanese|chinese|korean|thai|indonesian|simplified|traditional|\bjp\b|\bjpn\b|\bcn\b|\bchs\b|\bcht\b|\bm6a\b", re.I)
 
 DELTA_REIGN = re.compile(r"\bdelta reign\b", re.I)  # Gideon, 2026-10-07: Delta Reign pre-orders too
-ETB = re.compile(r"elite trainer|\betb\b", re.I)  # Gideon, 2026-10-07: older ETBs, only below collector value
+ETB = re.compile(r"elite trainer|\betb\b", re.I)
+# Gideon, 2026-10-08: any English booster box (missed a Takealot drop), at retail or below collector value
+BOOSTER_BOX = re.compile(r"booster box|booster display|\b36[- ]?packs?\b", re.I)  # Gideon, 2026-10-07: older ETBs, only below collector value
 
 def anniversary(title):
     """Label for the products Gideon wants alerts on (English 30th Anniversary or Delta Reign), else None."""
@@ -85,6 +87,8 @@ def anniversary(title):
         return "30TH ANNIVERSARY"
     if DELTA_REIGN.search(t):
         return "DELTA REIGN"
+    if BOOSTER_BOX.search(t):
+        return "BOOSTER BOX"
     if ETB.search(t):
         return "ETB"
     return None
@@ -96,7 +100,7 @@ def alert_title(title, store):
     return f"{label} IN STOCK / PRE-ORDER: {store}"
 
 def is_30th(title):
-    """Wanted product (English 30th Anniversary, Delta Reign, or any English ETB)."""
+    """Wanted product (English 30th Anniversary, Delta Reign, any English booster box or ETB)."""
     return anniversary(title) is not None
 
 def retail_ref(title):
@@ -153,9 +157,11 @@ def send_30th(events, deals, state):
     return set(sent)
 
 def current(i):
-    """Still listed (seen in the last day) and still passes today's product filter."""
+    """Still listed (seen in the last day; Takealot 30 days, as sold-out items leave its search)
+    and still passes today's product filter."""
     seen = i.get("last_seen", "")
-    fresh = seen >= (dt.datetime.now() - dt.timedelta(days=1)).isoformat(timespec="seconds")
+    days = 30 if STORE_BY_NAME.get(i.get("store"), {}).get("type") == "takealot" else 1
+    fresh = seen >= (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
     return fresh and is_tcg(i["title"])
 
 def snapshot_30th(state, deals):
@@ -443,7 +449,7 @@ def update_watchlist(deals, state):
     thirtieth = [i for i in state["items"].values()
                  if not i["in_stock"] and is_30th(i["title"]) and mine(i["store"]) and i["key"] not in fresh
                  and current(i)
-                 and STORE_BY_NAME.get(i["store"], {}).get("type") == "shopify"
+                 and STORE_BY_NAME.get(i["store"], {}).get("type") in ("shopify", "takealot")
                  # older ETBs abroad are never valued (no shipping/import in their price), so can't alert
                  and not (anniversary(i["title"]) == "ETB" and STORE_BY_NAME[i["store"]].get("currency"))]
     for k, d in picked:
@@ -468,10 +474,16 @@ def poll_listing(w):
         pr = p.get("prices") or {}
         price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
         return bool(p.get("is_in_stock") or p.get("is_on_backorder")), price
+    if st["type"] == "takealot":
+        d = get_json(f"https://api.takealot.com/rest/v-1-12-0/product-details/PLID{pid}?platform=desktop", tries=2)
+        it = next((i for i in (d.get("buybox") or {}).get("items", []) if i.get("is_selected")), None)
+        if not it:
+            return False, None
+        return bool(it.get("is_add_to_cart_available") or it.get("is_preorder")), it.get("price")
     return None
 
 LAST_DEALS = []  # valuations from the latest full scan, reused by quick scans
-WANTED_TERMS = ("30th", "delta reign", "elite trainer")  # WooCommerce quick searches covering every wanted listing
+WANTED_TERMS = ("30th", "delta reign", "elite trainer", "booster box")  # WooCommerce quick searches covering every wanted listing
 
 def quick_fetch(st):
     """Cheap 'what changed' request per store: newest listings only."""
@@ -507,7 +519,8 @@ def quick_fetch(st):
         return out
     if kind == "takealot":  # targeted searches instead of the whole Pokemon catalogue
         out = []
-        for q in ("pokemon 30th", "pokemon 30th celebration", "pokemon delta reign"):
+        for q in ("pokemon 30th", "pokemon 30th celebration", "pokemon delta reign", "pokemon booster box",
+                  "pokemon elite trainer box"):
             d = get_json("https://api.takealot.com/rest/v-1-12-0/searches/products?" + urllib.parse.urlencode({"qsearch": q}), tries=1)
             for r in d["sections"]["products"].get("results", []):
                 pv, core = r["product_views"], r["product_views"]["core"]
@@ -871,6 +884,13 @@ def main():
                     events.append(("PRICE DROP", it))
             it["last_seen"] = now
             state["items"][it["key"]] = it
+        # Takealot drops sold-out items from search: anything missing from a full scan is sold out,
+        # and stays on the every-minute watch so a restock is caught (poll_listing checks it by PLID)
+        if STORE_BY_NAME.get(name, {}).get("type") == "takealot":
+            keys = {it["key"] for it in found}
+            for k, i in state["items"].items():
+                if i["store"] == name and k not in keys and i["in_stock"]:
+                    i["in_stock"] = False
 
     state["last_run"] = now
     for name, found in results.items():
