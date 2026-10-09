@@ -91,6 +91,11 @@
       "url": "https://www.takealot.com"
     },
     {
+      "name": "Checkers",
+      "type": "checkers",
+      "url": "https://www.checkers.co.za"
+    },
+    {
       "name": "Toy Kingdom",
       "type": "shopify",
       "url": "https://toykingdom.co.za",
@@ -299,6 +304,7 @@
     "Readers Warehouse",
     "Sword and Board",
     "Total Cards (UK)",
+    "Checkers",
     "Toy Kingdom",
     "Vitika Imports",
     "WZRD TCG",

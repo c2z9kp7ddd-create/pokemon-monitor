@@ -364,7 +364,58 @@ def localize(store, items):
         it["intl"] = True
     return items
 
-SCANNERS = {"shopify": scan_shopify, "woo": scan_woo,
+# Checkers (Gideon, 2026-10-09): its search and catalogue need a login, but robots.txt allows crawling and
+# each public product page carries price and stock for national one-day delivery. Product URLs come from
+# its sitemap (cached 6 h); only wanted Pokemon listings are read, one page at a time.
+CHECKERS_CACHE = HERE / ".checkers_urls.json"
+CHECKERS_GATE = threading.Semaphore(1)
+
+def get_html(url, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
+    with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as r:
+        return r.read().decode("utf-8", "replace")
+
+def checkers_urls(base):
+    """Wanted Pokemon product URLs from the Checkers sitemap: [(url, title-from-slug)]."""
+    try:
+        c = json.loads(CHECKERS_CACHE.read_text())
+        if time.time() - c["t"] < 6 * 3600:
+            return c["urls"]
+    except Exception:
+        pass
+    urls = []
+    for sm in re.findall(r"<loc>([^<]+)", get_html(f"{base}/sitemap.xml")):
+        check_deadline()
+        urls += [u for u in re.findall(r"<loc>([^<]+)", get_html(sm, timeout=60)) if re.search(r"pokemon", u, re.I)]
+    out = []
+    for u in urls:
+        title = re.sub(r"-\w+$", "", u.rsplit("/", 1)[-1]).replace("-", " ")
+        if is_tcg(title) and anniversary(title):
+            out.append([u, title])
+    CHECKERS_CACHE.write_text(json.dumps({"t": time.time(), "urls": out}))
+    return out
+
+def checkers_product(store, url):
+    """One Checkers product page -> item (in stock only when it can be ordered for delivery)."""
+    with CHECKERS_GATE:
+        h = get_html(url)
+    name = re.search(r'"@type":"Product","name":"([^"]+)"', h)
+    m = re.search(r'"price":([\d.]+),"outOfStock":(true|false),"discountedPrice":([\d.]+|null)', h)
+    if not (name and m):
+        raise ValueError("Checkers page has no product data (layout changed or blocked)")
+    price = float(m.group(3)) if m.group(3) != "null" else float(m.group(1))
+    return item(store, url.rsplit("-", 1)[-1], json.loads(f'"{name.group(1)}"'), url,
+                price or None, m.group(2) == "false" and price > 0)
+
+def scan_checkers(store, base):
+    out = []
+    for u, _ in checkers_urls(base):
+        check_deadline()
+        out.append(checkers_product(store, u))
+        time.sleep(1)
+    return out
+
+SCANNERS = {"shopify": scan_shopify, "woo": scan_woo, "checkers": scan_checkers,
             "takealot": scan_takealot, "magento": scan_magento}
 
 # ---------------------------------------------------------------- notify
@@ -500,6 +551,9 @@ def poll_listing(w):
         pr = p.get("prices") or {}
         price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
         return bool(p.get("is_in_stock") or p.get("is_on_backorder")), price
+    if st["type"] == "checkers":
+        it = checkers_product(w["store"], w["url"])
+        return it["in_stock"], it["price"]
     if st["type"] == "takealot":
         d = get_json(f"https://api.takealot.com/rest/v-1-12-0/product-details/PLID{pid}?platform=desktop", tries=2)
         it = next((i for i in (d.get("buybox") or {}).get("items", []) if i.get("is_selected")), None)
@@ -556,6 +610,8 @@ def quick_fetch(st):
                                     f"https://www.takealot.com/{core['slug']}/PLID{core['id']}",
                                     (bb.get("prices") or [None])[0], bb.get("is_add_to_cart_available")))
         return out
+    if kind == "checkers":
+        return []  # covered by the 5-second 30th checks; the full scan reads every page every 5 minutes
     return SCANNERS[kind](name, base)  # magento store is small: full scan is cheap
 
 def quick_scan(state):
@@ -688,6 +744,7 @@ def watch_loop(state, until):
 # its 30th listings with live stock, so 16 shops cost ~3 requests a second, not one per listing.
 # A hit is re-checked on the product's own page before any alert, so a stale search can't alert.
 STATE_LOCK = threading.Lock()
+CHECKERS_TURN = [-1]
 
 def fast_fetch(st):
     """The shop's 30th listings, available ones first: [item]."""
@@ -720,6 +777,13 @@ def fast_fetch(st):
             pr = p.get("prices") or {}
             price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
             out.append(item(name, p["id"], p["name"], p["permalink"], price, p.get("is_in_stock") or p.get("is_on_backorder")))
+    elif kind == "checkers":
+        # no search without a login: one 30th product page per beat, in turn
+        pages = [u for u, t in checkers_urls(base) if anniversary(t) == "30TH ANNIVERSARY"]
+        if pages:
+            CHECKERS_TURN[0] = (CHECKERS_TURN[0] + 1) % len(pages)
+            out.append(checkers_product(name, pages[CHECKERS_TURN[0]]))
+        return out  # rand prices already
     elif kind == "takealot":
         d = get_json("https://api.takealot.com/rest/v-1-12-0/searches/products?" + urllib.parse.urlencode({"qsearch": f"pokemon {q}"}),
                      tries=1, timeout=10)
@@ -772,7 +836,7 @@ def fast_loop(state, stop):
     max_backoff_seconds) and speeds back up as it answers; a 429 also pauses it for cooldown_minutes."""
     cfg = CONFIG["fast_30th"]
     base_wait = cfg["seconds"]
-    stores = [st for st in active_stores() if mine(st["name"]) and st["type"] in ("shopify", "woo", "takealot")
+    stores = [st for st in active_stores() if mine(st["name"]) and st["type"] in ("shopify", "woo", "takealot", "checkers")
               and st["name"] not in cfg.get("skip", [])]
     known = {n for n, s in state["stores"].items() if s.get("ok") or s.get("count")}
     wait = {st["name"]: base_wait for st in stores}

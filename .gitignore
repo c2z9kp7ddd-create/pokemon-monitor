@@ -7,3 +7,4 @@ com.pokemon-monitor.plist
 watchdog_state.json
 watchdog.log
 com.pokemon-watchdog.plist
+.checkers_urls.json
