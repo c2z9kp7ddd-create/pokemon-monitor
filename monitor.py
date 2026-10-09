@@ -61,7 +61,8 @@ def is_tcg(title, context=""):
             and not SINGLE_CARD.search(t))
 
 # "Cosmog 013/025", "SWSH123", "Mimikyu 075 ... Promo Cards": individual cards, not sealed product
-SINGLE_CARD = re.compile(r"\[mega evolution[^\]]*\]|\b\d{1,3}/\d{1,3}|\bbasic \w+ energy\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b", re.I)
+SINGLE_CARD = re.compile(r"\[mega evolution[^\]]*\]|\b\d{1,3}/\d{1,3}|\bbasic \w+ energy\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b|\b[rgb]/rgb\b"
+                         r"|\b(reverse )?holo(foil)?\b(?!.*\b(box|tin|collection box|pack)\b)|^[^-]*\b\d{3} - |\b(common|uncommon|(double |illustration |ultra |secret |hyper )?rare)\s*$", re.I)
 
 THIRTIETH = re.compile(r"\b30\s?th\b|\b30 years\b|\b30-year", re.I)
 
@@ -141,8 +142,14 @@ def msg_30th(it, deals_by_key, why=None):
         line += f" | Resell ~R{d['value']:,.0f} | Profit ~R{d['profit']:,.0f} ({d['roi']:.0%})"
     return f"{it['title']}\n{line}"
 
+ALERT_LOCK = threading.Lock()  # quick scan, listing checks and fast 30th checks run in parallel threads
+
 def first_alert(state, key, price):
     """True the first time a listing alerts; repeats only after 24 hours or a price 5%+ lower."""
+    with ALERT_LOCK:
+        return _first_alert(state, key, price)
+
+def _first_alert(state, key, price):
     sent = state.setdefault("alerted_wanted", {})
     prev = sent.get(key)
     now = time.time()
@@ -676,6 +683,150 @@ def watch_loop(state, until):
         time.sleep(max(1, 60 - (time.time() - t0)))
     qs.shutdown(wait=False, cancel_futures=True)
 
+# ---------------------------------------------------------------- fast 30th checks
+# Gideon, 2026-10-09: English 30th listings checked every 5-10 s. One request per shop returns all of
+# its 30th listings with live stock, so 16 shops cost ~3 requests a second, not one per listing.
+# A hit is re-checked on the product's own page before any alert, so a stale search can't alert.
+STATE_LOCK = threading.Lock()
+
+def fast_fetch(st):
+    """The shop's 30th listings, available ones first: [item]."""
+    name, kind = st["name"], st["type"]
+    base = st["url"].split("/collections/")[0]
+    q = CONFIG["fast_30th"].get("query", "30th")
+    out = []
+    if kind == "shopify" and st.get("fast_collection"):
+        # shops whose search is flooded by singles, tokens or books: read a small 30th / sealed collection instead
+        with SHOPIFY_GATE:
+            prods = get_json(f"{base}/collections/{st['fast_collection']}/products.json?limit=250", tries=1, timeout=15)["products"]
+        for p in prods:
+            vs = p.get("variants") or [{}]
+            out.append(item(name, p["id"], p["title"], f"{base}/products/{p['handle']}",
+                            vs[0].get("price"), any(v.get("available") for v in vs)))
+    elif kind == "shopify":
+        url = f"{base}/search/suggest.json?" + urllib.parse.urlencode({
+            "q": q, "resources[type]": "product", "resources[limit]": 10,
+            "resources[options][unavailable_products]": "last"})  # in-stock first: a restock is always in the top 10
+        with SHOPIFY_GATE:
+            d = get_json(url, tries=1, timeout=10)
+        for p in d["resources"]["results"]["products"]:
+            out.append(item(name, p["id"], p["title"], f"{base}/products/{p['handle']}", p.get("price"), p.get("available")))
+    elif kind == "woo":
+        for p in get_json(f"{base}/wp-json/wc/store/v1/products?search={urllib.parse.quote(q)}&per_page=100",
+                          tries=1, timeout=st.get("timeout", 15)):
+            pr = p.get("prices") or {}
+            price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
+            out.append(item(name, p["id"], p["name"], p["permalink"], price, p.get("is_in_stock") or p.get("is_on_backorder")))
+    elif kind == "takealot":
+        d = get_json("https://api.takealot.com/rest/v-1-12-0/searches/products?" + urllib.parse.urlencode({"qsearch": f"pokemon {q}"}),
+                     tries=1, timeout=10)
+        for r in d["sections"]["products"].get("results", []):
+            pv, core = r["product_views"], r["product_views"]["core"]
+            bb = pv.get("buybox_summary") or {}
+            out.append(item(name, core["id"], core["title"], f"https://www.takealot.com/{core['slug']}/PLID{core['id']}",
+                            (bb.get("prices") or [None])[0], bb.get("is_add_to_cart_available")))
+    return [i for i in localize(name, out) if anniversary(i["title"]) == "30TH ANNIVERSARY" and is_tcg(i["title"])]
+
+def fast_confirm(it):
+    """Ask the product's own page (not the search index) whether it can be bought: (in_stock, rand price)."""
+    res = poll_listing({"store": it["store"], "url": it["url"], "pid": it["key"].split("|", 1)[1]})
+    if not res or not res[0]:
+        return False, None
+    price = res[1]
+    cur = STORE_BY_NAME[it["store"]].get("currency", "ZAR")
+    if price and cur != "ZAR":
+        price = round(price * zar_per(cur), 2)
+    return True, price or it["price"]
+
+def fast_handle(state, st, found, known):
+    """Alert on 30th listings that became buyable; record stock either way."""
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    values = {d["key"]: d.get("value") for d in LAST_DEALS}
+    for it in found:
+        with STATE_LOCK:
+            old = state["items"].get(it["key"])
+        was_in = bool(old and old["in_stock"])
+        if it["in_stock"] and not was_in and (old or st["name"] in known):
+            ok, price = fast_confirm(it)
+            if not ok:
+                print(f"fast30: search said in stock, product page says not: {it['store']}: {it['title']}")
+                continue  # leave the stored state alone; the next check asks again
+            it["price"] = price
+            why = price_check(it, values.get(it["key"]))
+            if why and first_alert(state, it["key"], price):
+                notify(alert_title(it["title"], it["store"]), msg_30th(it, {}, why), priority=5, click=it["url"])
+                state["last_msg"] = time.time()
+            elif not why:
+                print(f"fast30 skipped (above retail and collector value): {it['store']}: {it['title']} R{price}")
+        with STATE_LOCK:
+            old = state["items"].get(it["key"])
+            it["first_seen"] = (old or {}).get("first_seen", now)
+            it["last_seen"] = now
+            state["items"][it["key"]] = dict(old or {}, **it)
+
+def fast_loop(state, stop):
+    """Each of my shops every fast_30th.seconds; a shop that errors slows down (doubling, up to
+    max_backoff_seconds) and speeds back up as it answers; a 429 also pauses it for cooldown_minutes."""
+    cfg = CONFIG["fast_30th"]
+    base_wait = cfg["seconds"]
+    stores = [st for st in active_stores() if mine(st["name"]) and st["type"] in ("shopify", "woo", "takealot")
+              and st["name"] not in cfg.get("skip", [])]
+    known = {n for n, s in state["stores"].items() if s.get("ok") or s.get("count")}
+    wait = {st["name"]: base_wait for st in stores}
+    due = {st["name"]: time.time() + i * base_wait / max(1, len(stores)) for i, st in enumerate(stores)}  # spread out
+    cool = state.setdefault("cooldown", {})
+    stats = {"ok": 0, "err": {}}
+    last_log = time.time()
+    ex = cf.ThreadPoolExecutor(max_workers=6)
+    running = {}
+    while not stop.is_set():
+        t = time.time()
+        for st in stores:
+            n = st["name"]
+            if n in running or due[n] > t or cool.get(n, 0) > t:
+                continue
+            running[n] = (ex.submit(fast_fetch, st), t)
+        for n, (f, started) in list(running.items()):
+            if not f.done():
+                continue
+            del running[n]
+            try:
+                fast_handle(state, STORE_BY_NAME[n], f.result(), known)
+                stats["ok"] += 1
+                wait[n] = max(base_wait, wait[n] / 2)
+            except Exception as e:
+                code = re.search(r"HTTP Error (\d+)", str(e))
+                k = f"{n} {code.group(1) if code else type(e).__name__}"
+                stats["err"][k] = stats["err"].get(k, 0) + 1
+                wait[n] = min(cfg["max_backoff_seconds"], wait[n] * 2)
+                if "429" in str(e):
+                    cool[n] = time.time() + CONFIG["cooldown_minutes"] * 60
+            due[n] = max(started + wait[n], time.time() + 1)  # a steady beat from each check's start
+        if time.time() - last_log >= 60:
+            slow = {n: round(w) for n, w in wait.items() if w > base_wait}
+            print(f"fast30 {dt.datetime.now():%H:%M}: {len(stores)} shops, {stats['ok']} checks ok, "
+                  f"errors {stats['err'] or 'none'}{', slowed ' + str(slow) if slow else ''}", flush=True)
+            stats, last_log = {"ok": 0, "err": {}}, time.time()
+        stop.wait(0.5)
+    ex.shutdown(wait=False, cancel_futures=True)
+
+_FAST = [None, None]  # the running fast thread, so a crashed cycle in --loop mode never leaves two
+
+def start_fast(state):
+    stop_fast(*_FAST)
+    if not CONFIG.get("fast_30th", {}).get("enabled"):
+        return None, None
+    stop = threading.Event()
+    th = threading.Thread(target=fast_loop, args=(state, stop), daemon=True)
+    th.start()
+    _FAST[:] = [th, stop]
+    return th, stop
+
+def stop_fast(th, stop):
+    if th:
+        stop.set()
+        th.join(timeout=30)
+
 # ---------------------------------------------------------------- dashboard
 
 def write_dashboard(state, deals):
@@ -855,6 +1006,7 @@ def main():
     now = dt.datetime.now().isoformat(timespec="seconds")
     OUTBOX.clear()
     flush_outbox(state)
+    fast = start_fast(state) if "--dry-run" not in args else (None, None)  # 30th every 5 s, from the start
 
     # a store's first successful scan only records what it has; announcing all of it would be spam
     known = {n for n, st in state["stores"].items() if st.get("ok") or st.get("count")}
@@ -948,8 +1100,10 @@ def main():
     if watch_for:  # Mac: watch until this many seconds after the run started
         until = RUN_START + watch_for
     if until:
-        STATE_FILE.write_text(json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1))  # save once before the long watch
+        with STATE_LOCK:
+            STATE_FILE.write_text(json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1))  # save once before the long watch
         watch_loop(state, until)
+    stop_fast(*fast)
     STATE_FILE.write_text(json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1))
     write_dashboard(state, deals)
     if IS_GITHUB:

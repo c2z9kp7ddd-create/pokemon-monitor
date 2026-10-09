@@ -75,7 +75,7 @@
     "blind box",
     "figure blind",
     "wheel spin",
-    "rip n ship",
+    "rip n ship", "rip & ship", "rip and ship", "only for ", "auction winner", "reserved for",
     "mystery spin",
     "sleeve "
   ],
@@ -134,7 +134,8 @@
     {
       "name": "Level Up Store",
       "type": "shopify",
-      "url": "https://levelupstore.co.za"
+      "url": "https://levelupstore.co.za",
+      "fast_collection": "pokemon-cards"
     },
     {
       "name": "Geekstop ZA",
@@ -154,7 +155,8 @@
     {
       "name": "Aniware",
       "type": "shopify",
-      "url": "https://sealed.aniware.co.za"
+      "url": "https://sealed.aniware.co.za",
+      "fast_collection": "30th-celebration"
     },
     {
       "name": "The Geek Home",
@@ -169,12 +171,14 @@
     {
       "name": "Big Bang Shop",
       "type": "shopify",
-      "url": "https://bigbangshop.co.za/collections/pokemon-trading-card-game"
+      "url": "https://bigbangshop.co.za/collections/pokemon-trading-card-game",
+      "fast_collection": "pokemon-tcg-30th-celebration"
     },
     {
       "name": "WZRD TCG",
       "type": "shopify",
-      "url": "https://wzrd.co.za"
+      "url": "https://wzrd.co.za",
+      "fast_collection": "pokemon-sealed"
     },
     {
       "name": "Mithril Vault",
@@ -219,7 +223,8 @@
     {
       "name": "Readers Warehouse",
       "type": "shopify",
-      "url": "https://www.readerswarehouse.co.za/collections/pokemon-books-and-cards"
+      "url": "https://www.readerswarehouse.co.za/collections/pokemon-books-and-cards",
+      "fast_collection": "pokemon-books-and-cards"
     },
     {
       "name": "Card Legends",
@@ -229,7 +234,8 @@
     {
       "name": "Weebforce",
       "type": "shopify",
-      "url": "https://www.weebforce.co.za/collections/pokemon"
+      "url": "https://www.weebforce.co.za/collections/pokemon",
+      "fast_collection": "pokemon-trading-cards"
     },
     {
       "name": "Silver Toy Shop",
@@ -304,6 +310,7 @@
   "shopify_rescan_minutes": 4,
   "cooldown_minutes": 30,
   "quick_scan_seconds": 60,
+  "fast_30th": {"enabled": true, "seconds": 5, "max_backoff_seconds": 120, "query": "30th", "skip": ["Rocket Grunt TCG", "Mithril Vault"]},
   "full_scan_seconds": 300,
   "probe_local_only": false,
   "retail_tolerance": 0.15,
