@@ -121,6 +121,134 @@ def check_cloud(fix):
     return problems
 
 
+CLOSED_WORDS = ("back soon", "be back", "closed", "maintenance", "opening soon", "password")
+FIXABLE_CLOUD = ("429", "403")       # the cloud is rate-limited or blocked: the Mac can cover the shop
+BUDGET = ("budget", "unfinished")    # catalogue too big to scan in time
+
+
+def shop_closed(url):
+    """True when the shop's home page says it is closed / coming back soon."""
+    base = re.match(r"https?://[^/]+", url).group(0)
+    try:
+        r = subprocess.run(["curl", "-s", "-L", "--max-time", "20", "-A", "Mozilla/5.0", base],
+                           capture_output=True, text=True, timeout=30)
+        title = " ".join(re.findall(r"<title>([^<]*)", r.stdout, re.I)).lower()
+        return any(w in title for w in CLOSED_WORDS)
+    except Exception:
+        return False
+
+
+def pokemon_collection(store):
+    """For a Shopify shop whose catalogue is too big: its /collections/pokemon URL if that holds
+    at least as many Pokemon card products as the full scan found last time, else None."""
+    base = re.match(r"https?://[^/]+", store["url"]).group(0)
+    for handle in ("pokemon", "pokemon-tcg", "pokemon-sealed", "pokemon-trading-card-game"):
+        try:
+            ps = monitor.get_json(f"{base}/collections/{handle}/products.json?limit=250", tries=1).get("products", [])
+        except Exception:
+            continue
+        n = sum(monitor.is_tcg(p["title"], f'{p.get("vendor", "")} {p.get("product_type", "")}') for p in ps)
+        if n >= 20:
+            return f"{base}/collections/{handle}"
+    return None
+
+
+def cloud_store_results():
+    """{store: 'ok' | error text} from the last 3 completed cloud runs (newest wins)."""
+    if not os.path.exists(GH):
+        return None
+    code, out = sh(GH, "run", "list", "--workflow", "monitor.yml", "--limit", "6", "--json", "databaseId,status")
+    if code != 0:
+        return None
+    ids = [r["databaseId"] for r in json.loads(out or "[]") if r["status"] == "completed"][:3]
+    seen = {}
+    for rid in ids:
+        c, log = sh(GH, "run", "view", str(rid), "--log", timeout=120)
+        if c != 0:
+            continue
+        for line in log.splitlines():
+            line = re.sub(r"^.*?Z ", "", line)
+            m = re.match(r"^(.+?)\s{2,}\d+ TCG products$", line)
+            if m:
+                seen.setdefault(m.group(1).strip(), "ok")
+            m = re.match(r"^\[(.+?)\] FAILED: (.*)$", line)
+            if m:
+                seen.setdefault(m.group(1), m.group(2)[:120])
+            if "unfinished:" in line:
+                for name in re.findall(r"'([^']+)'", line):
+                    seen.setdefault(name, "scan time budget used up")
+    return seen
+
+
+def check_stores(fix, wd):
+    """Every shop in config.json must be scanned successfully by its owner (Mac or cloud).
+    Returns ({problem_id: text}, [config changes made])."""
+    cfg = json.loads((HERE / "config.json").read_text())
+    mac_only = set(cfg.get("local_only_stores", []))
+    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    mac = state.get("stores", {})
+    cloud = cloud_store_results()
+    fails = wd.setdefault("store_fails", {})
+    problems, changes, rows = {}, [], []
+    for st in cfg["stores"]:
+        name = st["name"]
+        owner = "Mac" if name in mac_only else "cloud"
+        if owner == "Mac":
+            x = mac.get(name)
+            if x is None:
+                err = "never scanned"
+            elif not x.get("ok"):
+                err = x.get("error") or "failed"
+            elif mins_since(x.get("at", "")) > 15:
+                err = f"last scanned {mins_since(x['at']):.0f} min ago"
+            else:
+                err = None
+        else:
+            if cloud is None:
+                rows.append(f"{name}: cloud (GitHub unreachable, not checked)")
+                continue
+            err = None if cloud.get(name) == "ok" else (cloud.get(name) or "not in the last 3 cloud runs")
+        if not err:
+            fails.pop(name, None)
+            rows.append(f"{name}: {owner} ok")
+            continue
+        if name in cfg.get("known_blocked", []):
+            rows.append(f"{name}: {owner} blocked by the shop (known, can't be fixed): {err[:40]}")
+            continue
+        fails[name] = fails.get(name, 0) + 1
+        rows.append(f"{name}: {owner} NOT OK ({err}) x{fails[name]}")
+        if fails[name] < 2:
+            continue  # one bad scan is usually a blip: act on the second in a row
+        fixed = ""
+        if fix:
+            if owner == "cloud" and any(c in err for c in FIXABLE_CLOUD) and "Rocket Grunt" not in name:
+                cfg["local_only_stores"] = sorted(mac_only | {name})
+                mac_only.add(name)
+                changes.append(f"moved {name} to the Mac (cloud got {err[:40]})")
+                fixed = " Moved it to the Mac, which can reach it."
+            elif any(b in err for b in BUDGET) and st["type"] == "shopify" and "/collections/" not in st["url"]:
+                url = pokemon_collection(st)
+                if url:
+                    st["url"] = url
+                    changes.append(f"{name} now scans {url}")
+                    fixed = " Switched it to its Pokemon collection so the scan finishes."
+            elif "404" in err or "401" in err:
+                if shop_closed(st["url"]):
+                    fixed = " The shop's site says it is closed for now; it will be scanned again when it reopens."
+            elif owner == "Mac" and ("never" in err or "min ago" in err):
+                sh("launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.pokemon-monitor")
+                fixed = " Restarted the Mac scan."
+        problems[f"store:{name}"] = f"{name} ({owner}): {err[:90]}.{fixed}"
+    if changes and fix:
+        (HERE / "config.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+        sh("git", "add", "config.json")
+        sh("git", "commit", "-q", "-m", "Watchdog: " + "; ".join(changes)
+           + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
+        sh("git", "push", "-q")
+    print("coverage:\n  " + "\n  ".join(rows))
+    return problems, changes
+
+
 def check_telegram():
     """The alert channel itself: the saved bot token must still be accepted."""
     try:
@@ -143,6 +271,8 @@ def main():
     problems.update(check_mac(fix=not DRY))
     problems.update(check_cloud(fix=not DRY))
     problems.update(check_telegram())
+    store_problems, _ = check_stores(not DRY, wd)
+    problems.update(store_problems)
     now = time.time()
     opened = {k: v for k, v in problems.items() if k not in wd["open"]}
     cleared = [k for k in wd["open"] if k not in problems]
@@ -159,7 +289,12 @@ def main():
     for k, v in opened.items():
         pending.setdefault(k, now)
     if report:
-        monitor.notify("Pokemon monitor problem", "\n".join(report.values()))
+        shops = [v for k, v in report.items() if k.startswith("store:")]
+        other = [v for k, v in report.items() if not k.startswith("store:")]
+        text = "\n".join(other)
+        if shops:
+            text += ("\n\n" if other else "") + "Shops not being monitored:\n" + "\n".join(shops)
+        monitor.notify("Pokemon monitor problem", text)
         for k, v in report.items():
             wd["open"][k] = {"since": now, "text": v}
             pending.pop(k, None)

@@ -75,7 +75,12 @@
     "blind box",
     "figure blind",
     "wheel spin",
-    "rip n ship", "rip & ship", "rip and ship", "only for ", "auction winner", "reserved for",
+    "rip n ship",
+    "rip & ship",
+    "rip and ship",
+    "only for ",
+    "auction winner",
+    "reserved for",
     "mystery spin",
     "sleeve "
   ],
@@ -89,7 +94,10 @@
       "name": "Toy Kingdom",
       "type": "shopify",
       "url": "https://toykingdom.co.za",
-      "fast_collection": ["pokemon-30th-celebration", "pokemon-30th-anniversary"]
+      "fast_collection": [
+        "pokemon-30th-celebration",
+        "pokemon-30th-anniversary"
+      ]
     },
     {
       "name": "Toys R Us",
@@ -311,7 +319,16 @@
   "shopify_rescan_minutes": 4,
   "cooldown_minutes": 30,
   "quick_scan_seconds": 60,
-  "fast_30th": {"enabled": true, "seconds": 5, "max_backoff_seconds": 120, "query": "30th", "skip": ["Rocket Grunt TCG", "Mithril Vault"]},
+  "fast_30th": {
+    "enabled": true,
+    "seconds": 5,
+    "max_backoff_seconds": 120,
+    "query": "30th",
+    "skip": [
+      "Rocket Grunt TCG",
+      "Mithril Vault"
+    ]
+  },
   "full_scan_seconds": 300,
   "probe_local_only": false,
   "retail_tolerance": 0.15,
@@ -392,5 +409,8 @@
       "booster pack|booster(?! box| bundle)",
       120
     ]
+  ],
+  "known_blocked": [
+    "Rocket Grunt TCG"
   ]
 }
