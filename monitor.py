@@ -615,35 +615,47 @@ def _safe_poll(w, cool):
     try:
         return poll_listing(w)
     except Exception as e:
-        if any(c in str(e) for c in ("429", "500", "502", "503")):  # rate-limited or site down: back off
+        if "429" in str(e):
             cool[w["store"]] = time.time() + CONFIG["cooldown_minutes"] * 60
+        elif any(c in str(e) for c in ("403", "500", "502", "503")):  # blocked or site down: pause its listing polls
+            cool[w["store"] + "|watch"] = time.time() + 600
         print("watch poll failed:", w["store"], e, file=sys.stderr)
         return None
 
 def watch_loop(state, until):
-    """Between full scans: quick scan of every store about every 2 minutes, and a stock check of each
-    watched sold-out listing about every minute, until `until` (epoch)."""
+    """Between full scans, on a true 1-minute beat: a quick scan of every store (in its own thread, so
+    slow shops can't delay it) and stock checks of the watched sold-out listings, least recently checked
+    first, cut off after ~50 s so the next minute starts on time."""
     watch = state.setdefault("watch", {})
     cfg = CONFIG["resale"]
     print(f"watching {len(watch)} sold-out listings (profitable or 30th) until {dt.datetime.fromtimestamp(until):%H:%M}")
-    last_quick = 0  # first quick scan straight away
+    qs = cf.ThreadPoolExecutor(max_workers=1)
+    quick = None
     while time.time() < until - 20:
         t0 = time.time()
-        checked = 0
-        if CONFIG["quick_scan_seconds"] and t0 - last_quick >= CONFIG["quick_scan_seconds"] - 5:
-            last_quick = t0  # measured from the start, so checks stay on a steady 1-minute beat
-            try:
-                checked = quick_scan(state)
-            except Exception as e:
-                print("quick scan failed:", e, file=sys.stderr)
+        if CONFIG["quick_scan_seconds"] and (quick is None or quick.done()):
+            quick = qs.submit(quick_scan, state)  # never two at once; a slow one just skips a beat
         cool = state.setdefault("cooldown", {})
-        due = [(k, w) for k, w in watch.items() if cool.get(w["store"], 0) <= time.time()]
+        names = {st["name"] for st in active_stores()}  # cloud leaves Mac-only shops to the Mac
+        due = [(k, w) for k, w in watch.items() if w["store"] in names
+               and max(cool.get(w["store"], 0), cool.get(w["store"] + "|watch", 0)) <= time.time()]
+        due.sort(key=lambda kw: kw[1].get("polled", 0))
         for k, w in due:
             w["pid"] = k.split("|", 1)[1]
-        with cf.ThreadPoolExecutor(max_workers=8) as ex:  # one slow shop must not hold up the rest
-            polled = dict(zip([k for k, _ in due], ex.map(lambda kw: _safe_poll(kw[1], cool), due)))
+        polled = {}
+        ex = cf.ThreadPoolExecutor(max_workers=8)  # one slow shop must not hold up the rest
+        futs = {ex.submit(_safe_poll, w, cool): k for k, w in due}
+        try:
+            for f in cf.as_completed(futs, timeout=max(5, 50 - (time.time() - t0))):
+                polled[futs[f]] = f.result()
+        except cf.TimeoutError:
+            pass  # the rest go first next minute
+        ex.shutdown(wait=False, cancel_futures=True)
         for key, w in due:
-            res = polled.get(key)
+            if key not in polled:
+                continue
+            w["polled"] = time.time()
+            res = polled[key]
             if not res or not res[0]:
                 continue
             price = res[1] or w["price"]
@@ -659,9 +671,10 @@ def watch_loop(state, until):
                 state["last_msg"] = time.time()
             if key in state.get("items", {}):
                 state["items"][key].update(in_stock=True, price=price)
-            del watch[key]
-        minute_status(state, checked, len(due))
-        time.sleep(max(5, 60 - (time.time() - t0)))
+            watch.pop(key, None)
+        print(f"watch {dt.datetime.now():%H:%M}: {len(polled)} of {len(due)} sold-out listings checked")
+        time.sleep(max(1, 60 - (time.time() - t0)))
+    qs.shutdown(wait=False, cancel_futures=True)
 
 # ---------------------------------------------------------------- dashboard
 
