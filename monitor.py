@@ -83,6 +83,8 @@ def anniversary(title):
     t = norm(title)
     if NON_ENGLISH.search(t):
         return None
+    if re.search(r"\bbinder\b", t, re.I) and not re.search(r"collection", t, re.I):
+        return None  # a binder on its own is an accessory, not sealed product
     if THIRTIETH.search(t):
         return "30TH ANNIVERSARY"
     if DELTA_REIGN.search(t):
@@ -95,8 +97,8 @@ def anniversary(title):
 
 def alert_title(title, store):
     label = anniversary(title)
-    if label == "ETB":
-        return f"ETB BELOW COLLECTOR VALUE: {store}"
+    if label in ("ETB", "BOOSTER BOX"):
+        return f"{label} BELOW COLLECTOR VALUE: {store}"
     return f"{label} IN STOCK / PRE-ORDER: {store}"
 
 def is_30th(title):
@@ -115,7 +117,7 @@ def price_check(it, value=None):
     """Gideon, 2026-10-07: alert only at retail price or below collector value.
     Returns a short reason to alert, or None to stay quiet."""
     price, ref = it.get("price"), retail_ref(it["title"])
-    if anniversary(it["title"]) == "ETB":  # older sets: collector value is the only test
+    if anniversary(it["title"]) in ("ETB", "BOOSTER BOX"):  # collector value is the only test
         return f"below collector value ~R{value:,.0f}" if value and price is not None and price < value else None
     if price is None:
         return "price not shown"
@@ -139,6 +141,18 @@ def msg_30th(it, deals_by_key, why=None):
         line += f" | Resell ~R{d['value']:,.0f} | Profit ~R{d['profit']:,.0f} ({d['roi']:.0%})"
     return f"{it['title']}\n{line}"
 
+def first_alert(state, key, price):
+    """True the first time a listing alerts; repeats only after 24 hours or a price 5%+ lower."""
+    sent = state.setdefault("alerted_wanted", {})
+    prev = sent.get(key)
+    now = time.time()
+    if prev and now - prev["t"] < 86400 and not (price and prev.get("price") and price <= prev["price"] * 0.95):
+        return False
+    sent[key] = {"t": now, "price": price}
+    for k in [k for k, v in sent.items() if now - v["t"] > 7 * 86400]:
+        del sent[k]
+    return True
+
 def send_30th(events, deals, state):
     """Every wanted anniversary listing that becomes buyable gets its own message, any price."""
     by_key = {d["key"]: d for d in deals}
@@ -148,6 +162,9 @@ def send_30th(events, deals, state):
             why = price_check(it, (by_key.get(it["key"]) or {}).get("value"))
             if not why:
                 print(f"skipped (above retail and collector value): {it['store']}: {it['title']} R{it['price']}")
+                continue
+            if not first_alert(state, it["key"], it.get("price")):
+                print(f"skipped (already alerted): {it['store']}: {it['title']}")
                 continue
             notify(alert_title(it["title"], it["store"]), msg_30th(it, by_key, why),
                    priority=5, click=it["url"])
@@ -422,6 +439,8 @@ def send_deals(deals, state):
         prev = sent.get(d["key"])
         if prev and prev["active"] and d["price"] > prev["price"] * 0.95:
             continue
+        if not d["in_stock"] or not first_alert(state, d["key"], d["price"]):
+            continue
         notify(f"BUY NOW: {d['store']}", deal_msg(d), priority=5, click=d["url"])
         state["last_msg"] = time.time()
         sent[d["key"]] = {"price": d["price"], "active": True}
@@ -596,7 +615,7 @@ def _safe_poll(w, cool):
     try:
         return poll_listing(w)
     except Exception as e:
-        if "429" in str(e):
+        if any(c in str(e) for c in ("429", "500", "502", "503")):  # rate-limited or site down: back off
             cool[w["store"]] = time.time() + CONFIG["cooldown_minutes"] * 60
         print("watch poll failed:", w["store"], e, file=sys.stderr)
         return None
@@ -633,7 +652,7 @@ def watch_loop(state, until):
                 profit = w["value"] * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"] - price - cfg["buy_shipping_rand"]
                 roi = profit / (price + cfg["buy_shipping_rand"])
             why = anniversary(w["title"]) and price_check(dict(w, price=price), w.get("value"))
-            if why:
+            if why and first_alert(state, key, price):
                 d = {key: dict(w, price=price, profit=round(profit), roi=roi)} if profit is not None else {}
                 notify(alert_title(w["title"], w["store"]), msg_30th(dict(w, key=key, price=price), d, why),
                        priority=5, click=w["url"])
@@ -884,13 +903,6 @@ def main():
                     events.append(("PRICE DROP", it))
             it["last_seen"] = now
             state["items"][it["key"]] = it
-        # Takealot drops sold-out items from search: anything missing from a full scan is sold out,
-        # and stays on the every-minute watch so a restock is caught (poll_listing checks it by PLID)
-        if STORE_BY_NAME.get(name, {}).get("type") == "takealot":
-            keys = {it["key"] for it in found}
-            for k, i in state["items"].items():
-                if i["store"] == name and k not in keys and i["in_stock"]:
-                    i["in_stock"] = False
 
     state["last_run"] = now
     for name, found in results.items():
