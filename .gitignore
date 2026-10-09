@@ -4,3 +4,6 @@ dashboard.html
 monitor.log
 __pycache__/
 com.pokemon-monitor.plist
+watchdog_state.json
+watchdog.log
+com.pokemon-watchdog.plist
