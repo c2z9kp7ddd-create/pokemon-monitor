@@ -697,8 +697,11 @@ def fast_fetch(st):
     out = []
     if kind == "shopify" and st.get("fast_collection"):
         # shops whose search is flooded by singles, tokens or books: read a small 30th / sealed collection instead
-        with SHOPIFY_GATE:
-            prods = get_json(f"{base}/collections/{st['fast_collection']}/products.json?limit=250", tries=1, timeout=15)["products"]
+        fc = st["fast_collection"]
+        prods = []
+        for h in ([fc] if isinstance(fc, str) else fc):
+            with SHOPIFY_GATE:
+                prods += get_json(f"{base}/collections/{h}/products.json?limit=250", tries=1, timeout=15)["products"]
         for p in prods:
             vs = p.get("variants") or [{}]
             out.append(item(name, p["id"], p["title"], f"{base}/products/{p['handle']}",
