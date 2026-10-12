@@ -61,6 +61,9 @@ class Valuer:
         self.get_json, self.cache, self.cfg = get_json, cache, cfg
         self.lookups = 0
         self._fx = None
+        # a slow TCGplayer once stalled the Mac run before it saved, so the cache never grew and every run
+        # redid every lookup until the watchdog killed it (2026-10-12): stop looking up after this long
+        self.deadline = time.time() + cfg.get("lookup_budget_seconds", 90)
 
     def fx(self):
         if self._fx is None:
@@ -81,7 +84,7 @@ class Valuer:
                 "context": {"cart": {}, "shippingCountry": "US", "userProfile": {}},
                 "settings": {"useFuzzySearch": True, "didYouMean": {}}, "sort": {}}
         url = TCG_SEARCH + urllib.parse.urlencode({"q": query, "isList": "false"})
-        d = self.get_json(url, json.dumps(body).encode())
+        d = self.get_json(url, json.dumps(body).encode(), timeout=15, tries=2)
         return [{"name": r.get("productName", ""), "id": int(r.get("productId") or 0),
                  "market": r.get("marketPrice"), "lowest": r.get("lowestPrice"),
                  "url": f"https://www.tcgplayer.com/product/{int(r.get('productId') or 0)}"}
@@ -95,7 +98,7 @@ class Valuer:
         c = self.cache.get(q)
         if c and time.time() - c["t"] < self.cfg["price_refresh_hours"] * 3600:
             return c["m"]
-        if self.lookups >= self.cfg["max_lookups_per_run"]:
+        if self.lookups >= self.cfg["max_lookups_per_run"] or time.time() > self.deadline:
             return c["m"] if c else None
         self.lookups += 1
         try:

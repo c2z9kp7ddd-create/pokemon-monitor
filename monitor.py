@@ -27,6 +27,10 @@ from pathlib import Path
 
 import valuation
 
+import faulthandler, signal
+faulthandler.register(signal.SIGUSR1, all_threads=True)  # `kill -USR1 <pid>`: dump every thread's stack to the log
+sys.stdout.reconfigure(line_buffering=True)  # keep stdout and stderr in order in monitor.log
+
 HERE = Path(__file__).resolve().parent
 CONFIG = json.loads((HERE / "config.json").read_text())
 STATE_FILE = HERE / "state.json"
@@ -44,6 +48,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 
 def norm(s):
     s = html.unescape(s or "")
+    s = re.sub(r"[‐-―−]", " - ", s)  # "Mega Evolution—Delta Reign": a dropped dash glued the words together
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     return re.sub(r"\s+", " ", s).strip()
 
@@ -415,8 +420,56 @@ def scan_checkers(store, base):
         time.sleep(1)
     return out
 
+# Mithril Vault (2026-10-12): left Shopify for its own Next.js site. Its search pages carry each product's
+# handle, title, price and stock in the page data; pre-orders are taken on preorder.<domain>, one page per set.
+MITHRIL_SEARCHES = ("30th", "delta reign", "elite trainer", "booster box")
+MITHRIL_PRODUCT = re.compile(r'"product":\{"handle":"([^"]+)","title":"((?:[^"\\]|\\.)*)","price":"([^"]*)",'
+                             r'"available":(true|false)(?:[^{}]*?"kind":"(\w+)")?')
+MITHRIL_LANG = re.compile(r"\b(japanese|chinese|korean|thai|indonesian)\b", re.I)
+
+def _mithril_title(handle, title):
+    """Its titles often drop the set and 'Pokemon' ("Elite Trainer Box"); the handle has both."""
+    h = handle.replace("-", " ")
+    lang = MITHRIL_LANG.search(h)
+    if lang and not MITHRIL_LANG.search(title):
+        title = f"{lang.group(1).title()} {title}"
+    if "30th celebration" in h and not THIRTIETH.search(title):
+        title = f"30th Celebration {title}"
+    if h.startswith("pokemon") and "pokemon" not in norm(title).lower():
+        title = f"Pokemon TCG {title}"
+    return title
+
+def scan_mithril(store, base):
+    base = base.rstrip("/")
+    out, seen = [], set()
+    for q in MITHRIL_SEARCHES:
+        check_deadline()
+        page = get_html(f"{base}/search?" + urllib.parse.urlencode({"q": q})).replace('\\"', '"')
+        for handle, title, price, avail, kind in MITHRIL_PRODUCT.findall(page):
+            if handle in seen or (kind and kind != "sealed"):
+                continue
+            seen.add(handle)
+            title = _mithril_title(handle, json.loads(f'"{title}"'))
+            price = float(price or 0)
+            if not is_tcg(title) or price < 20:  # R0 / R10 are placeholder listings, not real prices
+                continue
+            out.append(item(store, handle, title, f"{base}/products/{handle}", price, avail == "true"))
+    pre = base.replace("://", "://preorder.", 1)
+    for s in sorted(set(re.findall(r'href="/sets/([\w-]+)"', get_html(pre + "/")))):
+        if not s.startswith("pokemon"):
+            continue
+        check_deadline()
+        h = get_html(f"{pre}/sets/{s}")
+        is_open = "Pre-orders open" in h
+        d = h.replace('\\"', '"')
+        for pid, name, price in re.findall(r'\{"id":"(\w+)","name":"((?:[^"\\]|\\.)*)","sellingPrice":([\d.]+)', d):
+            name = json.loads(f'"{name}"')
+            if is_tcg(name):
+                out.append(item(store, f"pre-{pid}", name, f"{pre}/sets/{s}", price, is_open))
+    return out
+
 SCANNERS = {"shopify": scan_shopify, "woo": scan_woo, "checkers": scan_checkers,
-            "takealot": scan_takealot, "magento": scan_magento}
+            "takealot": scan_takealot, "magento": scan_magento, "mithril": scan_mithril}
 
 # ---------------------------------------------------------------- notify
 
