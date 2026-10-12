@@ -169,7 +169,7 @@
     {
       "name": "Aniware",
       "type": "shopify",
-      "url": "https://sealed.aniware.co.za",
+      "url": "https://sealed.aniware.co.za/collections/pokemon",
       "fast_collection": "30th-celebration"
     },
     {
@@ -212,7 +212,7 @@
     {
       "name": "Sword and Board",
       "type": "shopify",
-      "url": "https://swordandboard.co.za"
+      "url": "https://swordandboard.co.za/collections/pokemon"
     },
     {
       "name": "Marvellous Hobbies",
@@ -243,7 +243,7 @@
     {
       "name": "Card Legends",
       "type": "shopify",
-      "url": "https://cardlegends.co.za"
+      "url": "https://cardlegends.co.za/collections/pokemon"
     },
     {
       "name": "Weebforce",
