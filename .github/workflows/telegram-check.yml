@@ -1,0 +1,41 @@
+name: telegram-check
+
+# Independent of the Mac's network: checks every 10 minutes that the Telegram bot token is accepted
+# and the bot can reach the alert chat. Silent while fine. When Telegram is broken the job fails,
+# so GitHub emails the repo owner (guards.py fails a run only when a problem is new, then every 6 h).
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: health/cloud_alerts.json
+          key: tgcheck-${{ github.run_id }}
+          restore-keys: tgcheck-
+
+      - name: Check Telegram
+        run: python3 guards.py telegram --cloud
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: always() && hashFiles('health/cloud_alerts.json') != ''
+        with:
+          path: health/cloud_alerts.json
+          key: tgcheck-${{ github.run_id }}-${{ github.run_attempt }}

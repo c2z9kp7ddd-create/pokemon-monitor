@@ -8,3 +8,7 @@ watchdog_state.json
 watchdog.log
 com.pokemon-watchdog.plist
 .checkers_urls.json
+com.pokemon-telegram-check.plist
+com.pokemon-guard-supervisor.plist
+health/
+guards.log
