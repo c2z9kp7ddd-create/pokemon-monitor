@@ -68,3 +68,15 @@ jobs:
           others=$(gh run list --workflow monitor.yml --limit 10 --json databaseId,status \
             --jq "[.[] | select(.databaseId != ${{ github.run_id }} and .status != \"completed\")] | length")
           if [ "$others" = "0" ]; then gh workflow run monitor.yml --ref main; else echo "next run already queued"; fi
+
+      # The Telegram check's own cron never fires reliably, and the Mac that used to start it is often
+      # on a network that blocks GitHub. This chain runs every ~5 min, so it starts the check instead
+      # whenever the last one is over 9 minutes old (the check keeps its own job so failures still email).
+      - name: Start Telegram check if due
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list --workflow telegram-check.yml --limit 1 --json createdAt --jq '.[0].createdAt // ""')
+          age=$(( $(date +%s) - $( [ -n "$last" ] && date -d "$last" +%s || echo 0 ) ))
+          if [ $age -gt 540 ]; then gh workflow run telegram-check.yml --ref main && echo "telegram check started"; else echo "telegram check ran ${age}s ago"; fi
