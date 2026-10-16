@@ -29,7 +29,10 @@ DRY = "--dry-run" in sys.argv
 
 
 def sh(*cmd, timeout=60):
-    r = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True, timeout=timeout)
+    try:
+        r = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:  # slow network: gh run view --log hung and crashed the whole watchdog
+        return 124, f"timed out after {timeout} s"
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
