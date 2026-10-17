@@ -929,7 +929,11 @@ def fast_loop(state, stop):
     stores = [st for st in active_stores() if mine(st["name"]) and st["type"] in ("shopify", "woo", "takealot", "checkers")
               and st["name"] not in cfg.get("skip", [])]
     known = known_stores(state)
-    wait = {st["name"]: base_wait for st in stores}
+    # cloud: reading a whole 30th collection is a much bigger request than a search; every 5 s from
+    # GitHub's shared IPs it got throttled, so those shops are read every cloud_collection_seconds there
+    floor = {st["name"]: (cfg.get("cloud_collection_seconds", 30) if IS_GITHUB and st.get("fast_collection")
+                          else base_wait) for st in stores}
+    wait = dict(floor)
     due = {st["name"]: time.time() + i * base_wait / max(1, len(stores)) for i, st in enumerate(stores)}  # spread out
     cool = state.setdefault("cooldown", {})
     stats = {"ok": 0, "err": {}}
@@ -940,7 +944,7 @@ def fast_loop(state, stop):
         t = time.time()
         for st in stores:
             n = st["name"]
-            if n in running or due[n] > t or cool.get(n, 0) > t:
+            if n in running or due[n] > t or max(cool.get(n, 0), cool.get(n + "|fast", 0)) > t:
                 continue
             running[n] = (ex.submit(fast_fetch, st), t)
         for n, (f, started) in list(running.items()):
@@ -950,17 +954,17 @@ def fast_loop(state, stop):
             try:
                 fast_handle(state, STORE_BY_NAME[n], f.result(), known)
                 stats["ok"] += 1
-                wait[n] = max(base_wait, wait[n] / 2)
+                wait[n] = max(floor[n], wait[n] / 2)
             except Exception as e:
                 code = re.search(r"HTTP Error (\d+)", str(e))
                 k = f"{n} {code.group(1) if code else type(e).__name__}"
                 stats["err"][k] = stats["err"].get(k, 0) + 1
                 wait[n] = min(cfg["max_backoff_seconds"], wait[n] * 2)
-                if "429" in str(e):
-                    cool[n] = time.time() + CONFIG["cooldown_minutes"] * 60
+                if "429" in str(e):  # pauses only these fast checks; the shop's scans carry on
+                    cool[n + "|fast"] = time.time() + CONFIG["cooldown_minutes"] * 60
             due[n] = max(started + wait[n], time.time() + 1)  # a steady beat from each check's start
         if time.time() - last_log >= 60:
-            slow = {n: round(w) for n, w in wait.items() if w > base_wait}
+            slow = {n: round(w) for n, w in wait.items() if w > floor[n]}
             print(f"fast30 {dt.datetime.now():%H:%M}: {len(stores)} shops, {stats['ok']} checks ok, "
                   f"errors {stats['err'] or 'none'}{', slowed ' + str(slow) if slow else ''}", flush=True)
             stats, last_log = {"ok": 0, "err": {}}, time.time()

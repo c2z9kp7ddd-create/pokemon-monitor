@@ -320,7 +320,8 @@
     "skip": [
       "Rocket Grunt TCG",
       "Mithril Vault"
-    ]
+    ],
+    "cloud_collection_seconds": 30
   },
   "full_scan_seconds": 300,
   "probe_local_only": false,

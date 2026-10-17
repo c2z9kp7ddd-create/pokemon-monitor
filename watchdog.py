@@ -118,7 +118,7 @@ def check_cloud(fix):
         if fix:
             c, o = sh(GH, "workflow", "run", "monitor.yml", "--ref", "main")
             problems["cloud_stalled"] += " Started it again." if c == 0 else f" Restart failed: {o.strip()[:80]}"
-    done = [r for r in runs if r["status"] == "completed"][:3]
+    done = [r for r in runs if r["status"] == "completed"][:8]
     if len(done) == 3 and all(r["conclusion"] not in ("success", "cancelled") for r in done):
         problems["cloud_failing"] = "The last 3 cloud runs failed."
     return problems
@@ -157,13 +157,14 @@ def pokemon_collection(store):
 
 
 def cloud_store_results():
-    """{store: 'ok' | error text} from the last 3 completed cloud runs (newest wins)."""
+    """{store: 'ok' | error text} from the last 8 completed cloud runs (newest wins)."""
     if not os.path.exists(GH):
         return None
-    code, out = sh(GH, "run", "list", "--workflow", "monitor.yml", "--limit", "6", "--json", "databaseId,status")
+    # the cloud searches each Shopify shop about every 20 min (5 shops per ~5-min run), so look back 8 runs
+    code, out = sh(GH, "run", "list", "--workflow", "monitor.yml", "--limit", "10", "--json", "databaseId,status")
     if code != 0:
         return None
-    ids = [r["databaseId"] for r in json.loads(out or "[]") if r["status"] == "completed"][:3]
+    ids = [r["databaseId"] for r in json.loads(out or "[]") if r["status"] == "completed"][:8]
     seen = {}
     for rid in ids:
         c, log = sh(GH, "run", "view", str(rid), "--log", timeout=120)
