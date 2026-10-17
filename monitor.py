@@ -258,8 +258,32 @@ def item(store, pid, title, url, price, in_stock):
             "in_stock": bool(in_stock)}
 
 def scan_shopify(store, base, max_pages=40):
+    if IS_GITHUB:  # Shopify throttles GitHub's shared IPs on whole-catalogue paging; targeted searches pass
+        return scan_shopify_light(store, base)
     with SHOPIFY_GATE:
         return _scan_shopify(store, base, max_pages)
+
+LIGHT_TERMS = ("30th", "delta reign", "elite trainer", "booster box", "evolutions", "generations")
+
+def scan_shopify_light(store, base):
+    """Every wanted listing via Shopify's product search, in-stock first: one small request per term."""
+    root = base.split("/collections/")[0]
+    out, seen = [], set()
+    for term in LIGHT_TERMS:
+        check_deadline()
+        url = f"{root}/search/suggest.json?" + urllib.parse.urlencode({
+            "q": term, "resources[type]": "product", "resources[limit]": 10,
+            "resources[options][unavailable_products]": "last"})
+        with SHOPIFY_GATE:
+            d = get_json(url, tries=1, timeout=15)
+        for p in d["resources"]["results"]["products"]:
+            if p["id"] in seen or not is_tcg(p["title"], p.get("vendor", "")):
+                continue
+            seen.add(p["id"])
+            out.append(item(store, p["id"], p["title"], f"{root}/products/{p['handle']}",
+                            p.get("price"), p.get("available")))
+        time.sleep(0.5)
+    return out
 
 def _scan_shopify(store, base, max_pages):
     out = []
