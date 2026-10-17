@@ -702,7 +702,8 @@ def quick_fetch(st):
 def quick_scan(state):
     """Every ~2 minutes: newest listings at every store; alert on 20th/30th items that became buyable."""
     cool = state.setdefault("cooldown", {})
-    stores = [st for st in active_stores() if cool.get(st["name"], 0) <= time.time()]
+    stores = [st for st in active_stores() if cool.get(st["name"], 0) <= time.time()
+              and not (IS_GITHUB and st["type"] == "shopify")]  # cloud: Shopify shops get the 5-second checks instead
     known = known_stores(state)
     events, now = [], dt.datetime.now().isoformat(timespec="seconds")
     ex = cf.ThreadPoolExecutor(max_workers=10)
@@ -1176,6 +1177,13 @@ def main():
             skipped.append(n)  # full Shopify catalogues are heavy; rescan each one every N minutes
         else:
             todo.append(st)
+    if IS_GITHUB:
+        # Shopify limits each IP across all its shops: a few shops per run, least recently scanned first,
+        # so the searches don't land in one burst on top of the 5-second checks
+        shop = sorted((st for st in todo if st["type"] == "shopify"), key=lambda st: last_ok.get(st["name"], 0))
+        keep = {st["name"] for st in shop[:CONFIG.get("github_shopify_per_run", 5)]}
+        skipped += [st["name"] for st in shop if st["name"] not in keep]
+        todo = [st for st in todo if st["type"] != "shopify" or st["name"] in keep]
     if IS_GITHUB and CONFIG.get("probe_local_only"):
         probe_local_only()
     SCAN_DEADLINE[0] = time.time() + CONFIG["scan_budget_seconds"]
