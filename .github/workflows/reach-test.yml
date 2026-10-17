@@ -1,0 +1,15 @@
+name: reach-test
+# one-off check: which Mac-only shops answer GitHub's servers at the normal checking pace
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: python3 reach_test.py 6
+        env:
+          GITHUB_ACTIONS: "true"
