@@ -786,7 +786,10 @@ def watch_loop(state, until):
             quick = qs.submit(quick_scan, state)  # never two at once; a slow one just skips a beat
         cool = state.setdefault("cooldown", {})
         names = {st["name"] for st in active_stores()}  # cloud leaves Mac-only shops to the Mac
+        # cloud: Shopify restocks show up in the 5-second checks (in-stock first), so their product pages
+        # aren't polled as well; ~325 page reads a minute from GitHub's shared IPs got throttled
         due = [(k, w) for k, w in watch.items() if w["store"] in names
+               and not (IS_GITHUB and STORE_BY_NAME.get(w["store"], {}).get("type") == "shopify")
                and max(cool.get(w["store"], 0), cool.get(w["store"] + "|watch", 0)) <= time.time()]
         due.sort(key=lambda kw: kw[1].get("polled", 0))
         for k, w in due:
