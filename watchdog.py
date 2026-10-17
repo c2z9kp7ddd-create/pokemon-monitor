@@ -220,8 +220,10 @@ def check_stores(fix, wd):
             continue
         fails[name] = fails.get(name, 0) + 1
         rows.append(f"{name}: {owner} NOT OK ({err}) x{fails[name]}")
-        if fails[name] < 2:
-            continue  # one bad scan is usually a blip: act on the second in a row
+        # one bad scan is usually a blip: act on the second in a row. Shops proven reachable from the
+        # cloud (reach test) get an hour, so a short throttle doesn't send them back to the Mac.
+        if fails[name] < (6 if name in cfg.get("cloud_verified", []) else 2):
+            continue
         fixed = ""
         if fix:
             if owner == "cloud" and any(c in err for c in FIXABLE_CLOUD) and "Rocket Grunt" not in name:

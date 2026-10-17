@@ -618,6 +618,14 @@ def poll_listing(w):
 LAST_DEALS = []  # valuations from the latest full scan, reused by quick scans
 WANTED_TERMS = ("30th", "delta reign", "elite trainer", "booster box")  # WooCommerce quick searches covering every wanted listing
 
+def known_stores(state):
+    """Shops whose listings this copy already knows, so a listing it hasn't seen is genuinely new.
+    A shop this copy hasn't scanned successfully in a day (e.g. just moved here from the Mac) starts
+    over: its first scan is recorded silently instead of announcing its whole stock."""
+    last_ok = state.get("last_ok", {})
+    return {n for n, st in state["stores"].items()
+            if (st.get("ok") or st.get("count")) and time.time() - last_ok.get(n, 0) < 86400}
+
 def quick_fetch(st):
     """Cheap 'what changed' request per store: newest listings only."""
     name, base, kind = st["name"], st["url"], st["type"]
@@ -671,7 +679,7 @@ def quick_scan(state):
     """Every ~2 minutes: newest listings at every store; alert on 20th/30th items that became buyable."""
     cool = state.setdefault("cooldown", {})
     stores = [st for st in active_stores() if cool.get(st["name"], 0) <= time.time()]
-    known = {n for n, st in state["stores"].items() if st.get("ok") or st.get("count")}
+    known = known_stores(state)
     events, now = [], dt.datetime.now().isoformat(timespec="seconds")
     ex = cf.ThreadPoolExecutor(max_workers=10)
     futs = {ex.submit(quick_fetch, st): st["name"] for st in stores}
@@ -866,7 +874,8 @@ def fast_handle(state, st, found, known):
         with STATE_LOCK:
             old = state["items"].get(it["key"])
         was_in = bool(old and old["in_stock"])
-        if it["in_stock"] and not was_in and (old or st["name"] in known):
+        # only shops this copy already knows: a shop just moved here could hold weeks-old stock records
+        if it["in_stock"] and not was_in and st["name"] in known:
             ok, price = fast_confirm(it)
             if not ok:
                 print(f"fast30: search said in stock, product page says not: {it['store']}: {it['title']}")
@@ -891,7 +900,7 @@ def fast_loop(state, stop):
     base_wait = cfg["seconds"]
     stores = [st for st in active_stores() if mine(st["name"]) and st["type"] in ("shopify", "woo", "takealot", "checkers")
               and st["name"] not in cfg.get("skip", [])]
-    known = {n for n, s in state["stores"].items() if s.get("ok") or s.get("count")}
+    known = known_stores(state)
     wait = {st["name"]: base_wait for st in stores}
     due = {st["name"]: time.time() + i * base_wait / max(1, len(stores)) for i, st in enumerate(stores)}  # spread out
     cool = state.setdefault("cooldown", {})
@@ -1129,7 +1138,7 @@ def main():
     fast = start_fast(state) if "--dry-run" not in args else (None, None)  # 30th every 5 s, from the start
 
     # a store's first successful scan only records what it has; announcing all of it would be spam
-    known = {n for n, st in state["stores"].items() if st.get("ok") or st.get("count")}
+    known = known_stores(state)
     results, skipped = {}, []
     cool = state.setdefault("cooldown", {})
     last_ok = state.setdefault("last_ok", {})
