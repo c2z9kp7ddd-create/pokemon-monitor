@@ -33,7 +33,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 HEALTH = HERE / "health"
 AGENTS = Path.home() / "Library/LaunchAgents"
-GH = "/opt/homebrew/bin/gh"
+GH = "/opt/homebrew/bin/gh" if os.path.exists("/opt/homebrew/bin/gh") else "gh"  # Mac / GitHub runner
 DRY = "--dry-run" in sys.argv
 CLOUD = "--cloud" in sys.argv
 
@@ -244,6 +244,7 @@ def telegram_role():
     if problems is None:
         return 0
     if CLOUD:
+        problems.update(check_cloud_chain())
         return cloud_verdict(problems)
     # watch the watcher: the supervisor must be alive too
     sup_age = mins_old(HEALTH / "supervisor.json")
@@ -261,6 +262,28 @@ def telegram_role():
                                                           "problems": problems}, indent=1))
     report("telegram", problems)
     return 0
+
+
+def check_cloud_chain():
+    """Cloud only: the monitor's run chain must be alive. If it stopped, start it again and say so on
+    Telegram, so the cloud watches itself even when the Mac is closed or off the internet."""
+    code, out = sh(GH, "run", "list", "--workflow", "monitor.yml", "--limit", "5",
+                   "--json", "status,createdAt", timeout=30)
+    if code != 0:
+        return {"chain_unknown": f"Could not read the monitor's cloud runs ({out.strip()[:80]})."}
+    runs = json.loads(out or "[]")
+    if any(r["status"] != "completed" for r in runs):
+        return {}
+    last = max((dt.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")) for r in runs), default=None)
+    age = (dt.datetime.now(dt.timezone.utc) - last).total_seconds() / 60 if last else 1e9
+    if age <= 15:
+        return {}
+    if not DRY:
+        sh(GH, "workflow", "run", "monitor.yml", "--ref", "main", timeout=30)
+    msg = f"The cloud monitor had not run for {age:.0f} minutes. Restarted it."
+    if not DRY:
+        send_tg("Pokemon cloud monitor restarted", msg)
+    return {"chain_stalled": msg}
 
 
 def cloud_verdict(problems):
