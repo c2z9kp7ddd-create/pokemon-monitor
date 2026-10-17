@@ -2,6 +2,10 @@ name: reach-test
 # one-off check: which Mac-only shops answer GitHub's servers at the normal checking pace
 on:
   workflow_dispatch:
+    inputs:
+      fast_shops:
+        description: "comma-separated shops for the 5-second test (empty = 1-minute reach test)"
+        default: ""
 permissions:
   contents: read
 jobs:
@@ -10,6 +14,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - run: python3 reach_test.py 6
+      - run: |
+          if [ -n "${{ inputs.fast_shops }}" ]; then python3 reach_fast_test.py "${{ inputs.fast_shops }}" 5 5; else python3 reach_test.py 6; fi
         env:
           GITHUB_ACTIONS: "true"
