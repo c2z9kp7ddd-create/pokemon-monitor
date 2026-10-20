@@ -31,6 +31,11 @@ NON_ENGLISH = re.compile(r"japanese|chinese|korean|thai|indonesian|simplified|tr
 ACCESSORY = re.compile(r"\b(protector|acrylic|magnetic|storage box|storage case|empty|sleeves?|toploaders?|"
                        r"deck box|playmat|dividers?|card case)\b", re.I)
 LONE_BINDER = re.compile(r"\bbinder\b", re.I)
+# Never alert, whatever the price (Gideon): (pattern, reason)
+NEVER = [
+    (re.compile(r"pitch black.*(elite trainer|\betb\b)|(elite trainer|\betb\b).*pitch black", re.I),
+     "Pitch Black ETBs (Gideon, 2026-10-20)"),
+]
 
 
 def norm(s):
@@ -51,6 +56,8 @@ def label(title):
         return None
     if LONE_BINDER.search(t) and not re.search(r"collection", t, re.I):
         return None  # a binder on its own is an accessory, not sealed product
+    if any(p.search(t) for p, _ in NEVER):
+        return None
     for name, pattern, _, required in TARGETS:
         if pattern.search(t):
             # a Delta Reign blister or pack is not wanted, and not an ordinary ETB/box either: stop here

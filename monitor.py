@@ -1231,6 +1231,33 @@ def heartbeat(state, results, deals):
            f"{buyable} buyable. You'll get a message the moment another one is.", channel="status")
     state["last_msg"] = time.time()
 
+def scan_report(state):
+    """Hourly scanning update to the separate status group (never to the deal chat): shops checked,
+    failing shops, alerts and why listings were turned down. Sends nothing until telegram_status_chat_id is set."""
+    every = CONFIG["updates"].get("status_report_minutes", 0)
+    if not every or not status_chat() or time.time() - state.get("last_status_report", 0) < every * 60:
+        return
+    role = "Cloud" if IS_GITHUB else "Server" if IS_SERVER else "Mac"
+    names = [st["name"] for st in active_stores() if mine(st["name"]) and st["name"] not in CONFIG.get("known_blocked", [])]
+    with STATE_LOCK:
+        shops = state.get("shop_stats", {})
+        stats = json.loads(json.dumps(state.get("stats", {})))
+        limit = CONFIG["updates"].get("store_stale_minutes", 45) * 60
+        bad = [n for n in names if time.time() - (shops.get(n) or {}).get("last_ok", 0) > limit]
+        fast = [_median_gap((shops.get(n) or {}).get("beats_fast", [])) for n in names]
+    fast = sorted(f for f in fast if f)
+    c, r = stats.get("counts", {}), stats.get("rejected", {})
+    lines = [f"{role}: {len(names) - len(bad)} of {len(names)} shops checked in the last {limit // 60} min"
+             + (f"; 30th checks every ~{fast[len(fast) // 2]:.0f} s (median)" if fast else ""),
+             "Not being checked: " + (", ".join(bad) if bad else "none"),
+             f"Today: {c.get('discovered', 0)} new listings, {c.get('verified_buyable', 0)} confirmed buyable, "
+             f"{c.get('alerts_sent', 0)} deal alerts",
+             "Turned down today: " + (", ".join(f"{k.replace('_', ' ')} {v}" for k, v in sorted(r.items(), key=lambda kv: -kv[1])
+                                              if k not in ("irrelevant", "duplicate")) or "nothing"),
+             f"Telegram: {TG_STATS['failed']} failed sends this run, {len(state.get('outbox', [])) + len(OUTBOX)} waiting"]
+    notify(f"Scan update ({role}, {sast_now():%H:%M})", "\n".join(lines), priority=1, silent=True, channel="status")
+    state["last_status_report"] = time.time()
+
 def cloud_watchdog():
     """On the Mac: if the cloud chain has stalled (no run in 30 min), start it again."""
     import subprocess
@@ -1563,6 +1590,7 @@ def main():
         save_state(state)  # once before the long watch
         watch_loop(state, until)
     stop_fast(*fast)
+    scan_report(state)
     save_state(state)
     write_status(state)
     write_dashboard(state, deals)

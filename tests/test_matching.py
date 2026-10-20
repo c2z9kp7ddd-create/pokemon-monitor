@@ -36,7 +36,7 @@ class Targets(unittest.TestCase):
 
     def test_generic_boxes_and_etbs(self):
         self.check("Pokemon Scarlet & Violet Prismatic Evolutions Elite Trainer Box", "ETB")
-        self.check("Pokemon Mega Evolution Pitch Black ETB", "ETB")
+        self.check("Pokemon Mega Evolution Perfect Order ETB", "ETB")
         self.check("Pokemon Surging Sparks Booster Box", "BOOSTER BOX")
         self.check("Pokemon Chaos Rising Booster Display 36 Packs", "BOOSTER BOX")
 
@@ -72,6 +72,15 @@ class Targets(unittest.TestCase):
         self.check("Pokemon Celebrations Ultra Premium Collection", None)     # 25th Anniversary product
         self.check("Pokemon 25th Anniversary Collection", None)
         self.check("Empty Elite Trainer Box", None)
+
+    def test_pitch_black_etbs_never_alert(self):
+        for t in ["Pokemon TCG Mega Evolution Pitch Black Elite Trainer Box",
+                  "Pokemon: Mega Evolution—Pitch Black: Pokemon Center Elite Trainer Box",
+                  "Pokemon Pitch Black ETB",
+                  "Elite Trainer Box - Pitch Black (Type May Vary)"]:
+            self.check(t, None)
+        self.check("Pokemon Mega Evolution Pitch Black Booster Box", "BOOSTER BOX")   # only the ETBs are out
+        self.check("Pokemon Mega Evolution Chaos Rising Elite Trainer Box", "ETB")
 
     def test_is_tcg_drops_singles_and_merch(self):
         self.assertFalse(monitor.is_tcg("Pikachu ex 030/193 Delta Reign"))

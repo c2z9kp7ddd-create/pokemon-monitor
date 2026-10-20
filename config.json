@@ -323,7 +323,8 @@
     "max_watch_30th": 250,
     "status_messages": false,
     "minute_status": false,
-    "store_stale_minutes": 45
+    "store_stale_minutes": 45,
+    "status_report_minutes": 60
   },
   "scan_budget_seconds": 420,
   "shopify_rescan_minutes": 20,

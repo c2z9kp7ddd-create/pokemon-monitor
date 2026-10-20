@@ -158,3 +158,27 @@ class StaleShops(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScanReport(unittest.TestCase):
+    def setUp(self):
+        isolate(self)
+
+    def test_silent_without_a_status_group(self):
+        with mock.patch.object(monitor, "status_chat", return_value=None), \
+             mock.patch.object(monitor, "notify", side_effect=AssertionError("must not send")), \
+             mock.patch.dict(monitor.CONFIG["updates"], {"status_report_minutes": 60}):
+            monitor.scan_report(fresh_state())
+
+    def test_hourly_to_the_status_group_only(self):
+        sent = []
+        s = fresh_state()
+        with mock.patch.object(monitor, "status_chat", return_value="-100123"), \
+             mock.patch.object(monitor, "notify", lambda t, m, **k: sent.append((t, m, k))), \
+             mock.patch.dict(monitor.CONFIG["updates"], {"status_report_minutes": 60}):
+            monitor.scan_report(s)
+            monitor.scan_report(s)          # within the hour: nothing
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][2]["channel"], "status")
+        self.assertTrue(sent[0][2]["silent"])
+        self.assertIn("shops checked", sent[0][1])

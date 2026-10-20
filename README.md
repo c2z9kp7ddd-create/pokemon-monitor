@@ -21,6 +21,7 @@ A listing alerts only when ALL of these hold **[code: matching.py, pricing.py, m
    | BOOSTER BOX | "booster box", "booster display", "36 packs", any set | collector only |
    | ETB | "elite trainer", "ETB", any set | collector only |
 
+   Never alerts at any price: Pitch Black ETBs (`matching.NEVER`, 2026-10-20).
    Never matched: Japanese / Chinese / Korean / other-language product, accessories (protectors,
    sleeves, acrylic cases, empty boxes), lone binders, single cards, plush and merch.
    The old 20th Anniversary targets (XY Evolutions, Generations, CP6) were removed on 2026-10-07; an
@@ -140,8 +141,11 @@ request a timeout, so one slow shop cannot stall the rest.
   loudly instead of running silently.
 * Mac: launchd jobs `com.pokemon-monitor` (back to back: a ~5-minute cycle, restarted 10 s after each ends), `com.pokemon-watchdog`,
   `com.pokemon-telegram-check`, `com.pokemon-guard-supervisor` (watch each other and the cloud).
-* Status messages, if any, go to the separate Telegram group in `telegram_status_chat_id` (not set yet,
-  so they would fall back to the alert chat; currently they are switched off).
+* Scanning updates go to a separate Telegram group (`telegram_status_chat_id`, set up with
+  `setup_status_group.py`): an hourly silent "Scan update" (shops checked, shops not being checked,
+  alerts sent, why listings were turned down, Telegram failures; `updates.status_report_minutes`) and
+  problem warnings. Until the group exists, hourly updates are not sent; problem warnings (a shop
+  unchecked for 45 min) fall back to the deal chat.
 
 ## 8. What gets measured (`health/status.md`, GitHub run summary)
 
