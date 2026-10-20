@@ -447,5 +447,13 @@
     "Weebforce",
     "Zatu (UK)"
   ],
-  "github_shopify_per_run": 5
+  "github_shopify_per_run": 5,
+  "international": {
+    "import_duty_pct": null,
+    "clearance_fee_zar": 0,
+    "_note": "Overseas landed cost = item + intl_shipping (per store, in its currency, from checkout) + duty + 15% import VAT on (item x 1.10 + duty). Leave a value null until confirmed: listings then cannot pass the price test."
+  },
+  "retail_exact": [],
+  "collector_max_age_hours": 48,
+  "local_owner": "mac"
 }

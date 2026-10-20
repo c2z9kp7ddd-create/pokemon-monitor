@@ -1,27 +1,214 @@
-# SA Pokemon resale monitor
+# SA Pokemon stock monitor
 
-Runs 24/7 on GitHub Actions (each run queues the next ~10 min later; the cron is a backup).
-Scans 27 South African stores and messages Telegram (@Kingpokemon_bot).
+Watches South African (and two UK) shops for English Pokemon TCG sealed product and sends a Telegram
+message (bot @Kingpokemon_bot) when a wanted product can be bought at a good price. Python standard
+library only. Runs on GitHub Actions around the clock, plus a Mac job for the few shops that refuse
+cloud servers.
 
-Telegram messages: ONLY 20th Anniversary booster boxes / ETBs (XY Evolutions, Generations, Japanese CP6)
-and 30th Anniversary / 30th Celebration products. Nothing else.
-- 20TH / 30TH ANNIVERSARY IN STOCK: one message per listing the moment it is buyable (new, restock or pre-order),
-  any price. Shows cost, plus resale and profit when they can be estimated. Sold-out ones are checked every minute.
-- BUY NOW: a wanted listing that should also resell at a profit.
-- Pokemon update: 10%+ price drops on wanted listings that are in stock.
-- Still watching: daily check-in if nothing else was sent.
-- Monitor problem / back to normal: most stores unreachable for about an hour.
+Labels used below: **[code]** = read from the source code, **[run]** = seen in real run logs (date given),
+**[unverified]** = not yet confirmed in a live run.
 
-How profit is estimated (settings under "resale" in config.json)
-- Exact TCGplayer match (same set and product type), English products only
-- Resale value = the LOWER of TCGplayer recent sales (in rand) and the median price at 2+ other SA stores
-- Minus 12% selling fees, R120 postage out, R100 postage in; alert if profit >= R300 and >= 25%
-Estimates, not guarantees.
+## 1. What triggers an alert
 
-Stores that block cloud servers ("local_only_stores") are scanned by the Mac (launchd, every 5 min when awake).
-The Mac also restarts the cloud chain if it has stalled for 30 minutes.
+A listing alerts only when ALL of these hold **[code: matching.py, pricing.py, monitor.consider]**:
 
-    python3 monitor.py --dry-run     # scan + valuation, print only
-    python3 setup_phone.py           # reconnect Telegram / Discord
-    gh workflow run monitor.yml      # start the cloud run manually
-    launchctl bootout gui/$(id -u)/com.pokemon-monitor   # stop the Mac copy
+1. **Wanted product** (`matching.TARGETS`, first match wins), English only:
+
+   | Target | Matches | Price test |
+   |---|---|---|
+   | 30TH ANNIVERSARY | "30th", "30 years" (30th Celebration ETBs, tins, bundles, collections...) | retail OR collector |
+   | DELTA REIGN | "Delta Reign" | retail OR collector |
+   | BOOSTER BOX | "booster box", "booster display", "36 packs", any set | collector only |
+   | ETB | "elite trainer", "ETB", any set | collector only |
+
+   Never matched: Japanese / Chinese / Korean / other-language product, accessories (protectors,
+   sleeves, acrylic cases, empty boxes), lone binders, single cards, plush and merch.
+   The old 20th Anniversary targets (XY Evolutions, Generations, CP6) were removed on 2026-10-07; an
+   XY Evolutions ETB is now just an ETB (collector test). A test guards against them coming back.
+2. **Buyable**, confirmed on the product's own page or product API just before sending (not a search
+   index): `in stock` or an open `pre-order`. A failed request, a captcha or a page with no clear stock
+   signal is `unknown` and never alerts; a 404 is `listing gone`.
+3. **Passes its price test** on the verified price (section 2).
+4. **Not a repeat** (section 4).
+
+## 2. Price tests
+
+*Comparable price* = what you would actually pay:
+* SA shops: the listed price. Domestic delivery is not added (it varies, is often free over a threshold).
+* Overseas shops (Total Cards, Zatu): landed cost = item + international shipping + import duty + 15%
+  import VAT, where VAT is charged on (item value x 1.10 + duty), as SARS does. Neither shop publishes
+  shipping to SA (only shown at checkout) and the duty rate for trading cards is not confirmed, so both
+  are `null` in config. Then only the certain part (item + VAT) is known: a listing is rejected if even
+  that fails the test, and held back ("landed cost unconfirmed") if it would only pass on that minimum.
+  To enable UK alerts, put the real checkout shipping in the shop's `intl_shipping` (in GBP) and the duty
+  in `international.import_duty_pct` (e.g. 0.2). **In practice UK listings do not alert today.**
+
+*Retail test* (30th and Delta Reign only): comparable price <= normal SA shelf price x 1.15
+(`retail_tolerance`). Shelf prices come from `retail_refs_rand`: one typical price per product type
+(ETB R1,300 so the limit is R1,495, Pokemon Center ETB R2,000, booster box R3,999, booster bundle R699,
+mini tin R299 ...). These are estimates per product type, and alerts say so. `retail_exact` can hold
+a confirmed price for one specific product (pattern, rand, source); it wins over the type estimate.
+
+*Collector test*: comparable price strictly below collector value. Collector value = the lower of
+(a) TCGplayer market price, which is built from recent completed US sales, converted to rand, and
+(b) the median price of the same product at 2+ other SA shops (current listings only). It is only used
+when the TCGplayer match is exact (same set and product type, live listings within 0.8-1.5x of the
+market price) and the data is at most 48 h old (`collector_max_age_hours`). Asking prices are a weaker
+signal than sales; taking the lower of the two keeps it conservative.
+
+No price, no reference, stale value: no alert. The rejection reason is counted (section 7).
+
+## 3. Telegram message (real example from a dry run on 2026-10-20, not sent)
+
+```
+DELTA REIGN IN STOCK: Galaxy Boxx
+Pokemon: Delta Reign Elite Trainer Box
+R1,299.95 | in stock
+Retail: SA shelf ~R1,300 (typical for this product type, estimate), 0% below
+Collector value ~R1,299 (lower of TCGplayer recent sales ~R1,895 and SA median R1,299 across 14 shops, 19 Oct)
+Why: at retail: R1,300 vs SA shelf ~R1,300 (estimate for this product type)
+Checked 20 Oct 09:20 SAST on the product
+Open product -> link
+```
+Overseas listings also show the original price and, when shipping and duty are configured, the landed
+cost broken down. No routine "still running" messages (`heartbeat_hours` 0, `status_messages` false).
+
+## 4. Repeats and duplicates  **[code, tests/test_alerts.py]**
+
+* Each listing alerts once. It alerts again only when its price is at least 5% below the last alerted
+  price, or when it sold out and came back at least 24 hours after its last alert. It does not repeat
+  daily while it simply stays in stock, and a price bouncing around a threshold does not re-alert.
+* The same product listed twice by one shop, or moved to a new URL, shares a fingerprint: one alert.
+* Check-and-record is one locked step, so parallel threads finding the same deal send one message.
+* History lives in `state.json` (cloud: the Actions cache, restored every run), is saved atomically
+  right after each alert, and survives restarts and deploys. Entries expire after 14 days.
+* The Mac and the cloud never alert for the same shop (`mine()`): the cloud owns every shop except
+  `local_only_stores`; those belong to the Mac (or a server, see 9).
+* First full scan after this version is deployed: listings that were already buyable at a good price
+  (the old code never announced them) arrive as ONE summary message, then normal alerts resume.
+
+## 5. Shops  (config.json, counted 2026-10-20)
+
+| | Count | Notes |
+|---|---|---|
+| Configured | 38 | none disabled |
+| Checked by the cloud (GitHub) | 33 | all except the 4 below and Rocket Grunt |
+| Checked only by the Mac, when it is on | 4 | Geek Zone, Marvellous Hobbies, BT Games, Checkers (they return 403 to GitHub) |
+| Configured but cannot be checked | 1 | Rocket Grunt TCG (403 to every automated request) |
+| Not configured: block automated access | - | Amazon.co.za, Game, Makro, Pwned Games, Pokestop, Luckshack (bot checks, captchas) |
+
+Cloud evidence: 21 shops passed the GitHub reach test on 2026-10-17 (6/6 at 1-minute pace, 58/58 at
+5 s); on 2026-10-18, 292 of 292 cloud runs in 24 h succeeded and 30 of 30 cloud shops were scanned
+**[run]**. Galaxy Boxx (added 18 Oct) appears in cloud runs since then. **Magic The Trading** and
+**Otaku Kulture** were added on 20 Oct and have not been through a cloud run yet **[unverified]**; if
+they refuse GitHub, the watchdog moves them to the Mac.
+
+Shop types: Shopify 20 (incl. the 2 UK shops), WooCommerce 14, Takealot API, Toys R Us (Magento
+GraphQL), Checkers (public product pages from its sitemap), Mithril Vault (own site).
+
+`health/status.md` (and each GitHub run's summary page) lists every shop the copy owns with its last
+good check, real check intervals and last error. A shop is "NOT CHECKED" there, and the cloud sends a
+status message, after 45 minutes without a successful check.
+
+## 6. How often  **[code; intervals as measured in real runs, Oct 17-20]**
+
+| Check | Target | In practice (cloud) |
+|---|---|---|
+| 30th listings (search / small 30th collection, in-stock first) | every 5 s per shop | 5 s at most shops; 30 s at the 7 shops read via a 30th collection (Toy Kingdom, Level Up, Aniware, Big Bang, WZRD, Readers Warehouse, Weebforce). A shop that errors backs off, doubling up to 120 s |
+| 1-minute check (WooCommerce, Takealot, Toys R Us; newest + wanted searches) | 60 s | ~60-70 s. In the cloud Shopify shops skip it (their 5-second checks cover it) |
+| Sold-out wanted listings, product page | 60 s | WooCommerce / Takealot / Checkers; Shopify is not polled from the cloud (throttled), its restocks show in the in-stock-first 5 s checks |
+| Full scan of every shop | 5 min | non-Shopify every run; in the cloud each Shopify shop is searched about every 20 min (5 shops per run) |
+
+Rate limits: 429 pauses that shop's scans for 15 minutes (a 429 on the fast check pauses only the fast
+check), Shopify requests go one at a time from GitHub, each scan has a 5-minute budget and every
+request a timeout, so one slow shop cannot stall the rest.
+
+## 7. Cloud operation and health  **[code]**
+
+* `monitor.yml`: one run at a time (concurrency group), ~5 minutes each: full scan, then 1-minute and
+  5-second checks until the next run. Each run queues the next one (GitHub's cron is a backup; it did
+  not fire reliably for this repo). State goes through the Actions cache.
+* `telegram-check.yml`: every 10 minutes (queues itself) checks the bot token and the chat, fails its
+  job when Telegram is broken (GitHub then emails you), and restarts the monitor chain if no monitor
+  run started in 15 minutes. The monitor chain in turn starts this check if it is overdue. Neither can
+  restart anything while GitHub Actions itself is down; GitHub can also start runs late.
+* `tests.yml`: the unit tests on every push.
+* Telegram: each send is retried (network errors, 5xx, Telegram's 429 with its retry_after); permanent
+  errors are not retried; a message that still fails is queued and resent next run, marked
+  "(delayed)", for up to 24 h.
+* Config is validated at start; a broken config or missing Telegram secrets in the cloud fails the run
+  loudly instead of running silently.
+* Mac: launchd jobs `com.pokemon-monitor` (back to back: a ~5-minute cycle, restarted 10 s after each ends), `com.pokemon-watchdog`,
+  `com.pokemon-telegram-check`, `com.pokemon-guard-supervisor` (watch each other and the cloud).
+* Status messages, if any, go to the separate Telegram group in `telegram_status_chat_id` (not set yet,
+  so they would fall back to the alert chat; currently they are switched off).
+
+## 8. What gets measured (`health/status.md`, GitHub run summary)
+
+Per day (SAST): new listings discovered, product-page checks (buyable / not), alerts sent, duplicates
+suppressed, rejections by reason (`overpriced`, `no_reference`, `no_price`, `landed_unknown`,
+`unavailable`, `verify_failed`, `irrelevant`), Telegram sends / retries / failures and queued messages.
+Per shop: last good check, measured intervals of each check type, last error. Every rejection of a
+wanted listing is logged with its reason. A 14-day history is kept in state.json (`daily`).
+
+## 9. Covering the 4 Mac-only shops with the Mac closed
+
+Why they fail from GitHub: Geek Zone sits behind Cloudflare, Marvellous Hobbies and BT Games behind
+their hosts' firewalls, Checkers behind Amazon CloudFront/WAF. All four accept a home internet
+connection (the Mac). An Oracle Cloud server is also a data-centre address, so it **may be blocked
+too**; only a test from that server can tell. Options:
+
+| Option | Cost | Likely to reach the 4 shops | Effort |
+|---|---|---|---|
+| Small always-on device at home (Raspberry Pi 4/5 or an old laptop) | ~R1,500 once + electricity | yes (home connection, like the Mac) | plug in, run `server_setup.sh` |
+| Oracle Cloud Always Free VM, Johannesburg | R0 (card for sign-up) | unknown until tested | sign-up + `server_setup.sh` |
+| Keep the Mac awake and plugged in | R0 | yes | none, but not 24/7 |
+
+Steps (any Linux box; commands run from the Mac / VS Code terminal):
+```bash
+ssh -i ~/.ssh/pokemon_oracle ubuntu@<server-ip> 'bash -s' < server_setup.sh
+scp -i ~/.ssh/pokemon_oracle secrets.json ubuntu@<server-ip>:pokemon-monitor/
+ssh -i ~/.ssh/pokemon_oracle ubuntu@<server-ip> 'cd pokemon-monitor && bash server_reach_test.sh'
+```
+Only if the reach test shows CLOUD-OK for the 4 shops: set `"local_owner": "server"` in config.json,
+push, and `launchctl bootout gui/$(id -u)/com.pokemon-monitor` on the Mac. Until then the server
+scans but never alerts, so it cannot look operational by accident. **Not done yet: needs your sign-up
+(Oracle) or a device.**
+
+## 10. Setup, tests, deploy (Mac + VS Code)
+
+```bash
+cd ~/Desktop/pokemon-monitor
+python3 -m unittest discover -s tests -v      # 63+ tests, no network, no Telegram
+python3 monitor.py --dry-run                  # one real scan, prints decisions, sends nothing, saves nothing
+python3 setup_phone.py                        # (re)connect Telegram
+git push                                      # deploys: the next cloud run uses the new code
+gh workflow run monitor.yml --ref main        # start the cloud chain by hand
+gh run list --workflow monitor.yml --limit 5  # is it running?
+```
+Environment variables (never commit values): `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` (GitHub secrets for
+the cloud; `secrets.json` on the Mac, git-ignored), optional `TELEGRAM_STATUS_CHAT_ID`, `MONITOR_ROLE=server`
+(set by `server_setup.sh`). See `.env.example`.
+
+Adding a target: one row in `matching.TARGETS` plus genuine and near-miss titles in
+`tests/test_matching.py`. Adding a shop: an entry in `config.json` `stores` (`validate_config` checks it).
+
+## 11. Troubleshooting
+
+* No messages for days: normal when nothing qualifies. Check `health/status.md` / the latest GitHub run
+  summary: shops "ok", rejections listed, Telegram failures 0.
+* GitHub and Telegram unreachable from the Mac: some networks (FortiGate) block both and break HTTPS
+  to some shops. The cloud is unaffected; the Mac's queued messages go out once it is back online.
+* A cloud shop keeps failing with 403/429: the Mac watchdog moves it to `local_only_stores`.
+* Run killed or cancelled: state is saved after every alert and at the end; the next run restores it.
+
+## 12. Known limitations
+
+* Retail references are per product type, not per product, unless added to `retail_exact`.
+* UK shops cannot alert until their shipping and the import duty are confirmed and configured.
+* Collector value relies on TCGplayer (US sales) and SA asking prices; no SA completed-sales source.
+* Mithril Vault pages have no machine-readable stock flag: their text is read ("Add to cart" / "Sold
+  out"), and anything else is treated as unknown.
+* Domestic delivery costs are not included in SA prices.
+* GitHub Actions is not a server: runs can start late, and nothing in it can restart itself if
+  Actions is down. The 4 Mac-only shops are unchecked while the Mac is off.

@@ -25,6 +25,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import matching
+import pricing
 import valuation
 
 import faulthandler, signal
@@ -46,11 +48,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 
 # ---------------------------------------------------------------- matching
 
-def norm(s):
-    s = html.unescape(s or "")
-    s = re.sub(r"[‐-―−]", " - ", s)  # "Mega Evolution—Delta Reign": a dropped dash glued the words together
-    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
-    return re.sub(r"\s+", " ", s).strip()
+norm = matching.norm
 
 def has_any(text, words):
     t = " " + text.lower() + " "
@@ -69,121 +67,318 @@ def is_tcg(title, context=""):
 SINGLE_CARD = re.compile(r"\[mega evolution[^\]]*\]|\b\d{1,3}/\d{1,3}|\bbasic \w+ energy\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b|\b[rgb]/rgb\b"
                          r"|\b(reverse )?holo(foil)?\b(?!.*\b(box|tin|collection box|pack)\b)|^[^-]*\b\d{3} - |\b(common|uncommon|(double |illustration |ultra |secret |hyper )?rare)\s*$", re.I)
 
-THIRTIETH = re.compile(r"\b30\s?th\b|\b30 years\b|\b30-year", re.I)
-
-# 20th Anniversary (2016): XY Evolutions, Generations and the Japanese CP6 20th Anniversary set,
-# booster boxes and Elite Trainer Boxes only
-TWENTIETH = re.compile(r"\b20\s?th\b|\bxy\W*evolutions\b|(?<!prismatic )(?<!mega )\bevolutions\b|\bgenerations\b|\bcp6\b", re.I)
-BOX_OR_ETB = re.compile(r"booster (box|display)|elite trainer|\betb\b", re.I)
-
-# Gideon, 2026-10-05: alert only on English 30th Anniversary product (no 20th, no Japanese/Chinese etc.)
-NON_ENGLISH = re.compile(r"japanese|chinese|korean|thai|indonesian|simplified|traditional|\bjp\b|\bjpn\b|\bcn\b|\bchs\b|\bcht\b|\bm6a\b", re.I)
-
-DELTA_REIGN = re.compile(r"\bdelta reign\b", re.I)  # Gideon, 2026-10-07: Delta Reign pre-orders too
-ETB = re.compile(r"elite trainer|\betb\b", re.I)
-# Gideon, 2026-10-08: any English booster box (missed a Takealot drop), at retail or below collector value
-BOOSTER_BOX = re.compile(r"booster box|booster display|\b36[- ]?packs?\b", re.I)  # Gideon, 2026-10-07: older ETBs, only below collector value
+THIRTIETH = matching.TARGETS[0][1]  # also used to repair Mithril Vault titles
 
 def anniversary(title):
-    """Label for the products Gideon wants alerts on (English 30th Anniversary or Delta Reign), else None."""
-    t = norm(title)
-    if NON_ENGLISH.search(t):
-        return None
-    if re.search(r"\bbinder\b", t, re.I) and not re.search(r"collection", t, re.I):
-        return None  # a binder on its own is an accessory, not sealed product
-    if THIRTIETH.search(t):
-        return "30TH ANNIVERSARY"
-    if DELTA_REIGN.search(t):
-        return "DELTA REIGN"
-    if BOOSTER_BOX.search(t):
-        return "BOOSTER BOX"
-    if ETB.search(t):
-        return "ETB"
-    return None
-
-def alert_title(title, store):
-    label = anniversary(title)
-    if label in ("ETB", "BOOSTER BOX"):
-        return f"{label} BELOW COLLECTOR VALUE: {store}"
-    return f"{label} IN STOCK / PRE-ORDER: {store}"
+    """Wanted-product label (matching.TARGETS: 30TH ANNIVERSARY, DELTA REIGN, BOOSTER BOX, ETB), else None."""
+    return matching.label(title)
 
 def is_30th(title):
     """Wanted product (English 30th Anniversary, Delta Reign, any English booster box or ETB)."""
     return anniversary(title) is not None
 
-def retail_ref(title):
-    """Normal SA shelf price (rand) for this kind of product, from config retail_refs_rand (first match wins)."""
-    t = norm(title).lower()
-    for pattern, rand in CONFIG.get("retail_refs_rand", []):
-        if re.search(pattern, t):
-            return rand
-    return None
+# ---------------------------------------------------------------- stock status
+# A failed request, a captcha or an unreadable page is UNKNOWN: never proof of stock, never proof of none.
+IN_STOCK, PREORDER, OUT_OF_STOCK, GONE, UNKNOWN = "in stock", "pre-order", "out of stock", "listing gone", "unknown"
+BUYABLE = (IN_STOCK, PREORDER)
+PREORDER_WORDS = re.compile(r"\bpre-?\s?orders?\b", re.I)
+BLOCK_PAGE = re.compile(r"captcha|cf-chl|challenge-platform|access denied|are you a robot", re.I)
 
-def price_check(it, value=None):
-    """Gideon, 2026-10-07: alert only at retail price or below collector value.
-    Returns a short reason to alert, or None to stay quiet."""
-    price, ref = it.get("price"), retail_ref(it["title"])
-    if anniversary(it["title"]) in ("ETB", "BOOSTER BOX"):  # collector value is the only test
-        return f"below collector value ~R{value:,.0f}" if value and price is not None and price < value else None
-    if price is None:
-        return "price not shown"
-    if ref and price <= ref * (1 + CONFIG.get("retail_tolerance", 0.15)):
-        return f"retail (SA shelf price ~R{ref:,.0f})"
-    if value and price < value:
-        return f"below collector value ~R{value:,.0f}"
-    if not ref and not value:
-        return "no retail or collector price to compare"
-    return None
+# ---------------------------------------------------------------- state, stats
+STATE_LOCK = threading.RLock()  # quick scan, listing checks and fast 30th checks run in parallel threads
+ALERT_LOCK = STATE_LOCK         # one lock: state is saved while threads record alerts and stats
 
-def msg_30th(it, deals_by_key, why=None):
-    """Short release message: cost, plus resale and profit when the listing could be valued."""
-    d = deals_by_key.get(it["key"])
-    line = f"Cost R{it['price']:,.0f}" if it.get("price") else "Price not shown"
-    if why:
-        line += f" | {why}"
-    if it.get("orig"):
-        line += f" ({it['orig']}) + international shipping and SA import VAT"
-    if d:
-        line += f" | Resell ~R{d['value']:,.0f} | Profit ~R{d['profit']:,.0f} ({d['roi']:.0%})"
-    return f"{it['title']}\n{line}"
+def sast_now():
+    return dt.datetime.now(dt.timezone(dt.timedelta(hours=2)))
 
-ALERT_LOCK = threading.Lock()  # quick scan, listing checks and fast 30th checks run in parallel threads
+def stat(state, name, n=1, reason=None):
+    """Daily counters (state['stats']): discovered, verified, alerts, duplicates, rejections by reason..."""
+    with STATE_LOCK:
+        day = sast_now().strftime("%Y-%m-%d")
+        st = state.setdefault("stats", {"day": day, "counts": {}, "rejected": {}})
+        if st.get("day") != day:  # new day: keep yesterday's numbers in the 14-day history
+            hist = state.setdefault("daily", {})
+            hist[st["day"]] = {"counts": st["counts"], "rejected": st["rejected"]}
+            for d in sorted(hist)[:-14]:
+                del hist[d]
+            print(f"daily summary {st['day']}: {json.dumps(hist[st['day']], sort_keys=True)}")
+            st.clear(); st.update(day=day, counts={}, rejected={})
+        if reason:
+            st["rejected"][reason] = st["rejected"].get(reason, 0) + n
+        else:
+            st["counts"][name] = st["counts"].get(name, 0) + n
 
-def first_alert(state, key, price):
-    """True the first time a listing alerts; repeats only after 24 hours or a price 5%+ lower."""
-    with ALERT_LOCK:
-        return _first_alert(state, key, price)
-
-def _first_alert(state, key, price):
-    sent = state.setdefault("alerted_wanted", {})
-    prev = sent.get(key)
+def record_check(state, store, ok, kind, error=None):
+    """Per-shop health: last success, failures and the real interval between successful checks."""
     now = time.time()
-    if prev and now - prev["t"] < 86400 and not (price and prev.get("price") and price <= prev["price"] * 0.95):
+    with STATE_LOCK:
+        sh = state.setdefault("shop_stats", {}).setdefault(store, {})
+        if ok:
+            sh["last_ok"] = now
+            beats = sh.setdefault(f"beats_{kind}", [])
+            beats.append(round(now, 1))
+            del beats[:-30]
+        else:
+            sh["last_fail"], sh["last_error"] = now, str(error)[:160]
+            sh["fails"] = sh.get("fails", 0) + 1
+
+def save_state(state):
+    """Atomic: a run killed mid-write must not leave a half-written state.json (alert history lives there)."""
+    with STATE_LOCK:
+        data = json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1)
+    tmp = STATE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(data)
+    os.replace(tmp, STATE_FILE)
+
+# ---------------------------------------------------------------- alert policy
+# One alert per listing. Another only when the price is at least 5% below the last alerted price, or when
+# the listing sold out and came back at least 24 hours after its last alert. The same product listed twice
+# by a shop (or moved to a new URL) shares a fingerprint, so it alerts once.
+REPEAT_SECONDS = 86400
+REPEAT_DROP = 0.05
+
+def _repeat_ok(prev, price, now):
+    if not prev:
+        return True
+    if price and prev.get("price") and price <= prev["price"] * (1 - REPEAT_DROP) + 1e-6:
+        return True
+    return bool(prev.get("gone")) and now - prev["t"] >= REPEAT_SECONDS
+
+def would_alert(state, key, fp, price, now=None):
+    now = time.time() if now is None else now
+    with ALERT_LOCK:
+        sent = state.get("alerted_wanted", {})
+        return all(_repeat_ok(sent.get(k), price, now) for k in (key, fp) if k)
+
+def first_alert(state, key, price, fp=None, now=None):
+    """Check and record in one locked step, so two threads finding the same deal send one alert."""
+    now = time.time() if now is None else now
+    with ALERT_LOCK:
+        sent = state.setdefault("alerted_wanted", {})
+        if not all(_repeat_ok(sent.get(k), price, now) for k in (key, fp) if k):
+            return False
+        for k in (key, fp):
+            if k:
+                sent[k] = {"t": now, "price": price}
+        for k in [k for k, v in sent.items() if now - v["t"] > 14 * 86400]:
+            del sent[k]
+        return True
+
+def note_unavailable(state, it):
+    """A listing seen sold out after its alert may alert again once it returns (after 24 h)."""
+    if it.get("in_stock"):
+        return
+    with ALERT_LOCK:
+        sent = state.get("alerted_wanted", {})
+        for k in (it["key"], matching.fingerprint(it["store"], it["title"])):
+            if k in sent:
+                sent[k]["gone"] = True
+
+def merge_item(state, it, now, known, events=None):
+    """Store a freshly read listing; return the change it represents (NEW, BACK IN STOCK, PRICE DROP or None)."""
+    with STATE_LOCK:
+        old = state["items"].get(it["key"])
+        change = None
+        if old is None:
+            it["first_seen"] = now
+            if it["store"] in known:
+                change = "NEW"
+        else:
+            it["first_seen"] = old.get("first_seen", now)
+            if it["in_stock"] and not old.get("in_stock"):
+                change = "BACK IN STOCK"
+            elif (it["in_stock"] and it.get("price") and old.get("price")
+                  and it["price"] <= old["price"] * (1 - REPEAT_DROP) + 1e-6):
+                it["was"], change = old["price"], "PRICE DROP"
+        it["last_seen"] = now
+        state["items"][it["key"]] = dict(old or {}, **it)
+        if old is None:
+            stat(state, "discovered")
+    note_unavailable(state, it)
+    if events is not None and change:
+        events.append((change, it))
+    return change
+
+# ---------------------------------------------------------------- product-page verification
+
+def verify_listing(it):
+    """Ask the product's own page or product API (not a search index or cached listing) whether it can be
+    bought right now: (status, rand price or None, detail). Never raises."""
+    st = STORE_BY_NAME.get(it["store"]) or {}
+    kind, pid, url = st.get("type"), it["key"].split("|", 1)[1], it["url"]
+    try:
+        status, price, detail = _verify(kind, st, pid, url, it)
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410):
+            return GONE, None, f"product page returned {e.code}"
+        return UNKNOWN, None, f"check failed: HTTP {e.code}"
+    except Exception as e:  # timeouts, DNS, bad JSON, layout changes
+        return UNKNOWN, None, f"check failed: {type(e).__name__}: {str(e)[:80]}"
+    if price is not None and st.get("currency", "ZAR") != "ZAR":
+        price = round(price * zar_per(st["currency"]), 2)
+    if status in BUYABLE and PREORDER_WORDS.search(it["title"]):
+        status = PREORDER
+    return status, price, detail
+
+def _verify(kind, st, pid, url, it):
+    if kind == "shopify":
+        with SHOPIFY_GATE:
+            p = get_json(url.split("?")[0] + ".js", tries=1, timeout=15)
+        variants = p.get("variants") or []
+        avail = [v for v in variants if v.get("available")]
+        if not p.get("available") or (variants and not avail):
+            return OUT_OF_STOCK, (p.get("price") or 0) / 100 or None, "product page: sold out"
+        cents = min(v.get("price") or 0 for v in avail) if avail else p.get("price") or 0
+        return IN_STOCK, cents / 100 or None, "product page: available"
+    if kind == "woo":
+        p = get_json(f"{st['url']}/wp-json/wc/store/v1/products/{pid}", tries=1, timeout=st.get("timeout", 20))
+        pr = p.get("prices") or {}
+        price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
+        if not p.get("is_purchasable", True):
+            return OUT_OF_STOCK, price, "product: not purchasable"
+        if p.get("is_on_backorder"):
+            return PREORDER, price, "product: backorder / pre-order"
+        if p.get("is_in_stock"):
+            return IN_STOCK, price, "product: in stock"
+        return OUT_OF_STOCK, price, "product: out of stock"
+    if kind == "takealot":
+        d = get_json(f"https://api.takealot.com/rest/v-1-12-0/product-details/PLID{pid}?platform=desktop",
+                     tries=1, timeout=15)
+        sel = next((i for i in (d.get("buybox") or {}).get("items", []) if i.get("is_selected")), None)
+        if not sel:
+            return OUT_OF_STOCK, None, "product page: no seller offering it"
+        if sel.get("is_preorder"):
+            return PREORDER, sel.get("price"), "product page: pre-order"
+        if sel.get("is_add_to_cart_available"):
+            return IN_STOCK, sel.get("price"), "product page: add to cart"
+        return OUT_OF_STOCK, sel.get("price"), "product page: not orderable"
+    if kind == "checkers":
+        p = checkers_product(it["store"], url)
+        return (IN_STOCK if p["in_stock"] else OUT_OF_STOCK), p["price"], "product page (national delivery)"
+    if kind == "magento":
+        q = ('{products(filter:{url_key:{eq:"%s"}}){items{stock_status price_range{minimum_price{final_price{value}}}}}}'
+             % url.rsplit("/", 1)[-1].replace('"', ""))
+        items = get_json(f"{st['url']}/graphql?" + urllib.parse.urlencode({"query": q}), tries=1, timeout=15)["data"]["products"]["items"]
+        if not items:
+            return GONE, None, "product no longer listed"
+        price = items[0]["price_range"]["minimum_price"]["final_price"]["value"]
+        return (IN_STOCK if items[0]["stock_status"] == "IN_STOCK" else OUT_OF_STOCK), price, "product data"
+    if kind == "mithril":
+        h = get_html(url)
+        if BLOCK_PAGE.search(h):
+            return UNKNOWN, None, "page shows a bot check"
+        if pid.startswith("pre-"):  # pre-order set page
+            return (PREORDER if "Pre-orders open" in h else OUT_OF_STOCK), it.get("price"), "pre-order page"
+        if re.search(r"sold out|out of stock", h, re.I):
+            return OUT_OF_STOCK, None, "product page: sold out"
+        if re.search(r"add to cart|add to bag|buy now|pre-?order now", h, re.I):
+            return IN_STOCK, it.get("price"), "product page: add to cart"
+        return UNKNOWN, None, "product page: no stock signal"  # missing button is not proof either way
+    return UNKNOWN, None, f"no product-level check for {kind} shops"
+
+# ---------------------------------------------------------------- the one alert path
+
+LAST_VALUES = {}  # listing key -> (collector value rand, source text), from the latest valuation
+
+def fx_for(store):
+    cur = (store or {}).get("currency", "ZAR")
+    return 1.0 if cur == "ZAR" else zar_per(cur)
+
+def reject(state, code, it, source, detail=""):
+    stat(state, "rejected", reason=code)
+    if code not in ("irrelevant", "duplicate"):
+        print(f"reject [{code}] {source}: {it['store']}: {it['title'][:70]} R{it.get('price')} {detail}".rstrip())
+    return False
+
+DIGEST = []  # set to a list to collect alerts instead of sending them one by one (first sweep after deploy)
+
+def consider(state, it, source, verified=None):
+    """Discovery -> wanted? -> price pre-check -> duplicate? -> product-page check -> price on the verified
+    price -> record -> Telegram. verified: (status, price, detail) when the caller just read the product page.
+    Returns True when an alert was sent."""
+    lab = anniversary(it["title"])
+    if not lab or not is_tcg(it["title"]):
+        return reject(state, "irrelevant", it, source)
+    if not mine(it["store"]):
         return False
-    sent[key] = {"t": now, "price": price}
-    for k in [k for k, v in sent.items() if now - v["t"] > 7 * 86400]:
-        del sent[k]
+    store = STORE_BY_NAME.get(it["store"]) or {}
+    value, vsrc = LAST_VALUES.get(it["key"], (None, None))
+    fp = matching.fingerprint(it["store"], it["title"])
+    if it.get("price"):  # cheap pre-checks before spending a request on the product page
+        pre = pricing.decide(lab, norm(it["title"]).lower(), it["price"], store, CONFIG, fx_for(store), value, vsrc)
+        if not pre.qualifies:
+            return reject(state, pre.code, it, source, pre.reason)
+        if not would_alert(state, it["key"], fp, pre.comparable):
+            return reject(state, "duplicate", it, source)
+    status, price, detail = verified or verify_listing(it)
+    stat(state, "verified_buyable" if status in BUYABLE else "verify_not_buyable")
+    if status not in BUYABLE:
+        return reject(state, "verify_failed" if status == UNKNOWN else "unavailable", it, source, f"({detail})")
+    price = price if price is not None else it.get("price")
+    dec = pricing.decide(lab, norm(it["title"]).lower(), price, store, CONFIG, fx_for(store), value, vsrc)
+    if not dec.qualifies:
+        return reject(state, dec.code, it, source, dec.reason + " (on the product page)")
+    if not first_alert(state, it["key"], dec.comparable, fp):
+        return reject(state, "duplicate", it, source)
+    title, plain, rich = alert_message(dict(it, price=price), lab, dec, status, detail)
+    if DIGEST and DIGEST[0] is not None:
+        DIGEST.append((it, price, lab, dec, status))
+    else:
+        notify(title, plain, priority=5, click=it["url"], tg_html=rich)
+    stat(state, "alerts_sent")
+    with STATE_LOCK:
+        state["last_msg"] = time.time()
+        state.setdefault("alert_log", []).append({
+            "t": round(time.time()), "store": it["store"], "title": it["title"], "url": it["url"], "status": status,
+            "price": price, "comparable": dec.comparable, "test": dec.code, "retail": dec.retail,
+            "retail_kind": dec.retail_kind, "collector": dec.collector, "collector_source": dec.collector_source,
+            "estimated": dec.estimated, "source": source})
+        del state["alert_log"][:-200]
+    print(f"ALERT {source}: {it['store']}: {it['title'][:70]} {status} R{price} [{dec.code}] {dec.reason}")
+    save_state(state)  # a run killed later must not forget this alert and send it again
     return True
 
-def send_30th(events, deals, state):
-    """Every wanted anniversary listing that becomes buyable gets its own message, any price."""
-    by_key = {d["key"]: d for d in deals}
-    sent = []
-    for kind, it in events:
-        if kind in ("NEW", "BACK IN STOCK") and it["in_stock"] and is_30th(it["title"]) and mine(it["store"]):
-            why = price_check(it, (by_key.get(it["key"]) or {}).get("value"))
-            if not why:
-                print(f"skipped (above retail and collector value): {it['store']}: {it['title']} R{it['price']}")
-                continue
-            if not first_alert(state, it["key"], it.get("price")):
-                print(f"skipped (already alerted): {it['store']}: {it['title']}")
-                continue
-            notify(alert_title(it["title"], it["store"]), msg_30th(it, by_key, why),
-                   priority=5, click=it["url"])
-            sent.append(it["key"])
-    if sent:
-        state["last_msg"] = time.time()
-    return set(sent)
+def send_digest(found):
+    """One message listing every listing that qualified on the first sweep (cheapest first)."""
+    if not found:
+        return
+    found.sort(key=lambda f: f[1] or 0)
+    rows = [f"{html.escape(it['store'])} | R{price:,.0f} | {status} | {html.escape(dec.reason)}\n"
+            f'<a href="{html.escape(it["url"])}">{html.escape(it["title"][:90])}</a>' for it, price, lab, dec, status in found[:20]]
+    if len(found) > 20:
+        rows.append(f"...and {len(found) - 20} more (see the status report)")
+    notify(f"Buyable now at a good price: {len(found)} listings",
+           "\n".join(f"{it['store']}: {it['title']} R{price}" for it, price, *_ in found[:20]),
+           priority=5, tg_html="Already in stock when the new alert rules started. Each was checked on its product page. "
+                               "From now on you get one message per new deal.\n\n" + "\n\n".join(rows))
+
+def _pct(x):
+    return f"{abs(x) * 100:.0f}%"
+
+def alert_message(it, lab, dec, status, detail):
+    """(title, plain text, Telegram HTML). Every number shown comes from the decision; estimates say so."""
+    head = f"{lab} {'BELOW COLLECTOR VALUE' if dec.code == 'collector' and lab in ('ETB', 'BOOSTER BOX') else status.upper()}: {it['store']}"
+    lines = [it["title"]]
+    price = f"R{it['price']:,.2f}"
+    if it.get("orig"):
+        price = f"{it['orig']} (= R{it['price']:,.2f})"
+    lines.append(f"{price} | {status}")
+    if dec.landed and not dec.landed.parts.get("item") == dec.landed.total:
+        parts = dec.landed.parts
+        lines.append(f"Landed ~R{dec.landed.total:,.0f}: item R{parts['item']:,.0f} + shipping R{parts.get('shipping', 0):,.0f} "
+                     f"+ duty R{parts.get('duty', 0):,.0f} + import VAT R{parts.get('vat', 0):,.0f} (estimate)")
+    if dec.retail:
+        rel = "below" if dec.saving_vs_retail >= 0 else "above"
+        lines.append(f"Retail: SA shelf ~R{dec.retail:,.0f} ({'exact product' if dec.retail_kind == 'exact' else 'typical for this product type, estimate'})"
+                     f", {_pct(dec.saving_vs_retail)} {rel}")
+    if dec.collector:
+        lines.append(f"Collector value ~R{dec.collector:,.0f} ({dec.collector_source}), {_pct(dec.saving_vs_collector)} below"
+                     if dec.saving_vs_collector >= 0 else
+                     f"Collector value ~R{dec.collector:,.0f} ({dec.collector_source})")
+    lines.append(f"Why: {dec.reason}")
+    lines.append(f"Checked {sast_now():%d %b %H:%M} SAST on the {detail.split(':')[0]}")
+    rich = "\n".join(html.escape(l) for l in lines[1:])
+    return head, "\n".join(lines), f"{html.escape(lines[0])}\n{rich}"
 
 def current(i):
     """Still listed (seen in the last day; Takealot 30 days, as sold-out items leave its search)
@@ -192,27 +387,6 @@ def current(i):
     days = 30 if STORE_BY_NAME.get(i.get("store"), {}).get("type") == "takealot" else 1
     fresh = seen >= (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
     return fresh and is_tcg(i["title"])
-
-def snapshot_30th(state, deals):
-    """Once, after this feature first runs: what 30th Anniversary stock is buyable right now."""
-    if state.get("snapshot_30th_sent") or not IS_CLOUD:
-        return
-    by_key = {d["key"]: d for d in deals}
-    live = [i for i in state["items"].values()
-            if i["in_stock"] and is_30th(i["title"]) and mine(i["store"]) and current(i)]
-    live.sort(key=lambda i: (-(by_key.get(i["key"], {}).get("profit") or -1e9), i["price"] or 0))
-    lines = []
-    for i in live[:15]:
-        d = by_key.get(i["key"])
-        extra = f", profit ~R{d['profit']:,.0f}" if d else ""
-        lines.append(f'{html.escape(i["store"])} | R{i["price"]:,.0f}{extra}\n<a href="{html.escape(i["url"])}">{html.escape(i["title"])}</a>')
-    if len(live) > 15:
-        lines.append(f"...and {len(live) - 15} more")
-    notify(f"English 30th Anniversary: {len(live)} listings buyable now",
-           "\n".join(f"{i['store']}: {i['title']}" for i in live[:15]) or "None in stock right now.",
-           tg_html="\n\n".join(lines) or "None in stock right now. You'll get a message the moment one is.")
-    state["snapshot_30th_sent"] = True
-    state["last_msg"] = time.time()
 
 def is_hot(title):
     return has_any(norm(title), CONFIG["hot_words"])
@@ -257,13 +431,21 @@ def item(store, pid, title, url, price, in_stock):
             "price": round(float(price), 2) if price not in (None, "") else None,
             "in_stock": bool(in_stock)}
 
+def shopify_item(store, base, p):
+    """A Shopify product -> item. Price is that of the cheapest variant that can be bought (falling back to the
+    cheapest variant), so the price shown always belongs to a variant whose stock it reports."""
+    vs = p.get("variants") or [{}]
+    avail = [v for v in vs if v.get("available")]
+    pick = min(avail or vs, key=lambda v: float(v.get("price") or 0) or float("inf"))
+    return item(store, p["id"], p["title"], f"{base}/products/{p['handle']}", pick.get("price"), bool(avail))
+
 def scan_shopify(store, base, max_pages=40):
     if IS_GITHUB:  # Shopify throttles GitHub's shared IPs on whole-catalogue paging; targeted searches pass
         return scan_shopify_light(store, base)
     with SHOPIFY_GATE:
         return _scan_shopify(store, base, max_pages)
 
-LIGHT_TERMS = ("30th", "delta reign", "elite trainer", "booster box", "evolutions", "generations")
+LIGHT_TERMS = ("30th", "delta reign", "elite trainer", "booster box")  # one search per wanted target
 
 def scan_shopify_light(store, base):
     """Every wanted listing via Shopify's product search, in-stock first: one small request per term."""
@@ -296,9 +478,7 @@ def _scan_shopify(store, base, max_pages):
         for p in prods:
             if not is_tcg(p["title"], f'{p.get("vendor", "")} {p.get("product_type", "")}'):
                 continue
-            vs = p.get("variants") or [{}]
-            out.append(item(store, p["id"], p["title"], f"{base}/products/{p['handle']}",
-                            vs[0].get("price"), any(v.get("available") for v in vs)))
+            out.append(shopify_item(store, base, p))
         if len(prods) < 250:
             break
     return out
@@ -539,16 +719,48 @@ def notify(title, message, priority=3, click=None, tg_html=None, silent=False, c
             body["click"] = click
         sends.append(("ntfy", CONFIG.get("ntfy_server", "https://ntfy.sh"), body))
     for name, url, body in sends:
+        err = _post_with_retry(url, body, name)
+        if err is None:
+            print(f"sent via {name}: {title}")
+            continue
+        print(f"notify via {name} failed:", err, file=sys.stderr)  # never let a failed push kill the run
+        if name == "telegram":  # kept and retried next run (see flush_outbox)
+            TG_STATS["failed"] += 1
+            OUTBOX.append({"title": title, "message": message, "click": click,
+                           "tg_html": tg_html, "t": time.time(), "channel": channel})
+
+TG_STATS = {"sent": 0, "retried": 0, "failed": 0}
+
+def _post_with_retry(url, body, name, attempts=3):
+    """POST JSON; retry network errors, 5xx and Telegram's 429 (honouring retry_after, capped at 10 s).
+    Other 4xx (bad token, chat gone, bad HTML) are permanent: retrying would not help. Returns None or an error."""
+    err = None
+    for i in range(attempts):
         try:
             req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
                 "User-Agent": UA, "Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=20, context=SSL_CTX).read()
-            print(f"sent via {name}: {title}")
-        except Exception as e:  # never let a failed push kill the run
-            print(f"notify via {name} failed:", e, file=sys.stderr)
-            if name == "telegram":  # kept and retried next run (see flush_outbox)
-                OUTBOX.append({"title": title, "message": message, "click": click,
-                               "tg_html": tg_html, "t": time.time(), "channel": channel})
+            if name == "telegram":
+                TG_STATS["sent"] += 1
+            return None
+        except urllib.error.HTTPError as e:
+            err = f"HTTP {e.code}"
+            if e.code == 429:
+                try:
+                    wait = json.loads(e.read().decode()).get("parameters", {}).get("retry_after", 2)
+                except Exception:
+                    wait = 2
+            elif e.code >= 500:
+                wait = 2 * (i + 1)
+            else:
+                return err
+        except Exception as e:
+            err, wait = f"{type(e).__name__}: {str(e)[:120]}", 2 * (i + 1)
+        if i < attempts - 1:
+            if name == "telegram":
+                TG_STATS["retried"] += 1
+            time.sleep(min(float(wait), 10))
+    return err
 
 OUTBOX = []  # Telegram messages that failed this run
 
@@ -569,26 +781,6 @@ def deal_msg(d):
     """Short: cost, resale, profit. Details stay on the dashboard."""
     return (f"{d['title']}\n"
             f"Cost R{d['price']:,.0f} | Resell ~R{d['value']:,.0f} | Profit ~R{d['profit']:,.0f} ({d['roi']:.0%})")
-
-def send_deals(deals, state):
-    """Alert once per deal; again only if the price drops 5%+ or it sold out and came back."""
-    sent = state.setdefault("alerted", {})
-    live = {d["key"] for d in deals if d["deal"]}
-    for d in deals:
-        # the Mac copy alerts only for stores the cloud can't reach, so nothing arrives twice
-        if not d["deal"] or not mine(d["store"]) or not is_30th(d["title"]):
-            continue
-        prev = sent.get(d["key"])
-        if prev and prev["active"] and d["price"] > prev["price"] * 0.95:
-            continue
-        if not d["in_stock"] or not first_alert(state, d["key"], d["price"]):
-            continue
-        notify(f"BUY NOW: {d['store']}", deal_msg(d), priority=5, click=d["url"])
-        state["last_msg"] = time.time()
-        sent[d["key"]] = {"price": d["price"], "active": True}
-    for k, v in sent.items():
-        if k not in live:
-            v["active"] = False
 
 # ---------------------------------------------------------------- restock watch
 
@@ -623,28 +815,10 @@ def update_watchlist(deals, state):
                            "value": d.get("value"), "is30": True}
 
 def poll_listing(w):
-    """Live stock + price for one watched listing: (in_stock, price) or None if unknown."""
-    st = STORE_BY_NAME[w["store"]]
-    pid = w.get("pid")
-    if st["type"] == "shopify":
-        with SHOPIFY_GATE:
-            p = get_json(w["url"].split("?")[0] + ".js", tries=2)
-        return bool(p.get("available")), (p.get("price") or 0) / 100
-    if st["type"] == "woo":
-        p = get_json(f"{st['url']}/wp-json/wc/store/v1/products/{pid}", tries=2)
-        pr = p.get("prices") or {}
-        price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
-        return bool(p.get("is_in_stock") or p.get("is_on_backorder")), price
-    if st["type"] == "checkers":
-        it = checkers_product(w["store"], w["url"])
-        return it["in_stock"], it["price"]
-    if st["type"] == "takealot":
-        d = get_json(f"https://api.takealot.com/rest/v-1-12-0/product-details/PLID{pid}?platform=desktop", tries=2)
-        it = next((i for i in (d.get("buybox") or {}).get("items", []) if i.get("is_selected")), None)
-        if not it:
-            return False, None
-        return bool(it.get("is_add_to_cart_available") or it.get("is_preorder")), it.get("price")
-    return None
+    """(buyable, rand price) from the product page, or None when the check failed (status unknown)."""
+    status, price, _ = verify_listing({"store": w["store"], "url": w["url"], "title": w.get("title", ""),
+                                       "key": f"{w['store']}|{w['pid']}", "price": w.get("price")})
+    return None if status == UNKNOWN else (status in BUYABLE, price)
 
 LAST_DEALS = []  # valuations from the latest full scan, reused by quick scans
 WANTED_TERMS = ("30th", "delta reign", "elite trainer", "booster box")  # WooCommerce quick searches covering every wanted listing
@@ -666,9 +840,7 @@ def quick_fetch(st):
         out = []
         for p in prods:
             if is_tcg(p["title"], f'{p.get("vendor", "")} {p.get("product_type", "")}'):
-                vs = p.get("variants") or [{}]
-                out.append(item(name, p["id"], p["title"], f"{base}/products/{p['handle']}",
-                                vs[0].get("price"), any(v.get("available") for v in vs)))
+                out.append(shopify_item(name, base, p))
         return out
     if kind == "woo":
         prods, seen = [], set()
@@ -707,7 +879,7 @@ def quick_fetch(st):
     return SCANNERS[kind](name, base)  # magento store is small: full scan is cheap
 
 def quick_scan(state):
-    """Every ~2 minutes: newest listings at every store; alert on 20th/30th items that became buyable."""
+    """Every minute: newest / wanted listings at every store; changes go through the alert path."""
     cool = state.setdefault("cooldown", {})
     stores = [st for st in active_stores() if cool.get(st["name"], 0) <= time.time()
               and not (IS_GITHUB and st["type"] == "shopify")]  # cloud: Shopify shops get the 5-second checks instead
@@ -727,25 +899,18 @@ def quick_scan(state):
             name = futs[f]
             try:
                 found = localize(name, f.result())
+                record_check(state, name, True, "quick")
             except Exception as e:
+                record_check(state, name, False, "quick", e)
                 if "429" in str(e):
                     cool[name] = time.time() + CONFIG["cooldown_minutes"] * 60
                 continue
             for it in found:
-                old = state["items"].get(it["key"])
-                if old is None:
-                    it["first_seen"] = now
-                    if name in known:
-                        events.append(("NEW", it))
-                else:
-                    it["first_seen"] = old["first_seen"]
-                    if it["in_stock"] and not old["in_stock"]:
-                        events.append(("BACK IN STOCK", it))
-                it["last_seen"] = now
-                state["items"][it["key"]] = it
-    sent = send_30th(events, LAST_DEALS, state)
-    for k in sent:
-        state.get("watch", {}).pop(k, None)
+                merge_item(state, it, now, known, events)
+    sent = [it["key"] for change, it in events if it["in_stock"] and consider(state, it, "quick")]
+    with STATE_LOCK:
+        for k in sent:
+            state.get("watch", {}).pop(k, None)
     print(f"quick scan {now[11:16]}: {len(stores)} stores, {len(events)} changes, {len(sent)} alerts")
     return len(done)
 
@@ -768,15 +933,16 @@ def minute_status(state, stores_checked, polled):
     notify("Pokemon check", "\n".join(lines), priority=1, silent=True, tg_html="\n\n".join(links), channel="status")
 
 def _safe_poll(w, cool):
-    try:
-        return poll_listing(w)
-    except Exception as e:
-        if "429" in str(e):
+    """(status, rand price, detail) for one watched listing; failures come back as UNKNOWN."""
+    res = verify_listing({"store": w["store"], "url": w["url"], "title": w.get("title", ""),
+                          "key": f"{w['store']}|{w['pid']}", "price": w.get("price")})
+    if res[0] == UNKNOWN:
+        if "429" in res[2]:
             cool[w["store"]] = time.time() + CONFIG["cooldown_minutes"] * 60
-        elif any(c in str(e) for c in ("403", "500", "502", "503")):  # blocked or site down: pause its listing polls
+        elif any(c in res[2] for c in ("403", "500", "502", "503")):  # blocked or site down: pause its listing polls
             cool[w["store"] + "|watch"] = time.time() + 600
-        print("watch poll failed:", w["store"], e, file=sys.stderr)
-        return None
+        print("watch poll failed:", w["store"], res[2], file=sys.stderr)
+    return res
 
 def watch_loop(state, until):
     """Between full scans, on a true 1-minute beat: a quick scan of every store (in its own thread, so
@@ -814,23 +980,20 @@ def watch_loop(state, until):
             if key not in polled:
                 continue
             w["polled"] = time.time()
-            res = polled[key]
-            if not res or not res[0]:
+            status, price, detail = polled[key]
+            if status == UNKNOWN:
+                record_check(state, w["store"], False, "watch", detail)
+                continue  # a failed check says nothing about stock: keep watching
+            record_check(state, w["store"], True, "watch")
+            if status not in BUYABLE:
                 continue
-            price = res[1] or w["price"]
-            profit = roi = None
-            if w.get("value"):
-                profit = w["value"] * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"] - price - cfg["buy_shipping_rand"]
-                roi = profit / (price + cfg["buy_shipping_rand"])
-            why = anniversary(w["title"]) and price_check(dict(w, price=price), w.get("value"))
-            if why and first_alert(state, key, price):
-                d = {key: dict(w, price=price, profit=round(profit), roi=roi)} if profit is not None else {}
-                notify(alert_title(w["title"], w["store"]), msg_30th(dict(w, key=key, price=price), d, why),
-                       priority=5, click=w["url"])
-                state["last_msg"] = time.time()
-            if key in state.get("items", {}):
-                state["items"][key].update(in_stock=True, price=price)
-            watch.pop(key, None)
+            it = dict(state.get("items", {}).get(key) or {}, key=key, store=w["store"], title=w["title"],
+                      url=w["url"], price=price or w.get("price"), in_stock=True)
+            consider(state, it, "watch", verified=(status, price, detail))
+            with STATE_LOCK:
+                if key in state.get("items", {}):
+                    state["items"][key].update(in_stock=True, price=price or w.get("price"))
+                watch.pop(key, None)
         print(f"watch {dt.datetime.now():%H:%M}: {len(polled)} of {len(due)} sold-out listings checked")
         time.sleep(max(1, 60 - (time.time() - t0)))
     qs.shutdown(wait=False, cancel_futures=True)
@@ -839,7 +1002,6 @@ def watch_loop(state, until):
 # Gideon, 2026-10-09: English 30th listings checked every 5-10 s. One request per shop returns all of
 # its 30th listings with live stock, so 16 shops cost ~3 requests a second, not one per listing.
 # A hit is re-checked on the product's own page before any alert, so a stale search can't alert.
-STATE_LOCK = threading.Lock()
 CHECKERS_TURN = [-1]
 
 def fast_fetch(st):
@@ -856,9 +1018,7 @@ def fast_fetch(st):
             with SHOPIFY_GATE:
                 prods += get_json(f"{base}/collections/{h}/products.json?limit=250", tries=1, timeout=15)["products"]
         for p in prods:
-            vs = p.get("variants") or [{}]
-            out.append(item(name, p["id"], p["title"], f"{base}/products/{p['handle']}",
-                            vs[0].get("price"), any(v.get("available") for v in vs)))
+            out.append(shopify_item(name, base, p))
     elif kind == "shopify":
         url = f"{base}/search/suggest.json?" + urllib.parse.urlencode({
             "q": q, "resources[type]": "product", "resources[limit]": 10,
@@ -890,43 +1050,14 @@ def fast_fetch(st):
                             (bb.get("prices") or [None])[0], bb.get("is_add_to_cart_available")))
     return [i for i in localize(name, out) if anniversary(i["title"]) == "30TH ANNIVERSARY" and is_tcg(i["title"])]
 
-def fast_confirm(it):
-    """Ask the product's own page (not the search index) whether it can be bought: (in_stock, rand price)."""
-    res = poll_listing({"store": it["store"], "url": it["url"], "pid": it["key"].split("|", 1)[1]})
-    if not res or not res[0]:
-        return False, None
-    price = res[1]
-    cur = STORE_BY_NAME[it["store"]].get("currency", "ZAR")
-    if price and cur != "ZAR":
-        price = round(price * zar_per(cur), 2)
-    return True, price or it["price"]
-
 def fast_handle(state, st, found, known):
-    """Alert on 30th listings that became buyable; record stock either way."""
+    """Record stock; a 30th listing that just became buyable goes through the alert path (which re-checks it
+    on the product page before anything is sent)."""
     now = dt.datetime.now().isoformat(timespec="seconds")
-    values = {d["key"]: d.get("value") for d in LAST_DEALS}
     for it in found:
-        with STATE_LOCK:
-            old = state["items"].get(it["key"])
-        was_in = bool(old and old["in_stock"])
-        # only shops this copy already knows: a shop just moved here could hold weeks-old stock records
-        if it["in_stock"] and not was_in and st["name"] in known:
-            ok, price = fast_confirm(it)
-            if not ok:
-                print(f"fast30: search said in stock, product page says not: {it['store']}: {it['title']}")
-                continue  # leave the stored state alone; the next check asks again
-            it["price"] = price
-            why = price_check(it, values.get(it["key"]))
-            if why and first_alert(state, it["key"], price):
-                notify(alert_title(it["title"], it["store"]), msg_30th(it, {}, why), priority=5, click=it["url"])
-                state["last_msg"] = time.time()
-            elif not why:
-                print(f"fast30 skipped (above retail and collector value): {it['store']}: {it['title']} R{price}")
-        with STATE_LOCK:
-            old = state["items"].get(it["key"])
-            it["first_seen"] = (old or {}).get("first_seen", now)
-            it["last_seen"] = now
-            state["items"][it["key"]] = dict(old or {}, **it)
+        change = merge_item(state, dict(it), now, known)
+        if change and it["in_stock"] and st["name"] in known:
+            consider(state, it, "fast30")
 
 def fast_loop(state, stop):
     """Each of my shops every fast_30th.seconds; a shop that errors slows down (doubling, up to
@@ -959,10 +1090,13 @@ def fast_loop(state, stop):
                 continue
             del running[n]
             try:
-                fast_handle(state, STORE_BY_NAME[n], f.result(), known)
+                found = f.result()
+                record_check(state, n, True, "fast")
+                fast_handle(state, STORE_BY_NAME[n], found, known)
                 stats["ok"] += 1
                 wait[n] = max(floor[n], wait[n] / 2)
             except Exception as e:
+                record_check(state, n, False, "fast", e)
                 code = re.search(r"HTTP Error (\d+)", str(e))
                 k = f"{n} {code.group(1) if code else type(e).__name__}"
                 stats["err"][k] = stats["err"].get(k, 0) + 1
@@ -1065,34 +1199,13 @@ def probe_local_only():
         time.sleep(3)
 
 def mine(store):
-    """Cloud reports every store it scans; the Mac only reports the stores the cloud can't reach."""
-    return IS_CLOUD or store in set(CONFIG.get("local_only_stores", []))
-
-def send_updates(events, state):
-    """One Telegram digest per scan listing new products, restocks and price drops."""
-    cfg = CONFIG["updates"]
-    wanted = {"NEW": cfg["new_listings"], "BACK IN STOCK": cfg["restocks"], "PRICE DROP": True}
-    events = [(k, it) for k, it in events
-              if k == "PRICE DROP" and it["in_stock"] and mine(it["store"]) and is_30th(it["title"])
-              and price_check(it, next((d["value"] for d in LAST_DEALS if d["key"] == it["key"]), None))]
-    if not events:
-        return
-    events.sort(key=lambda e: (not is_hot(e[1]["title"]), e[0]))
-    counts = {k: sum(1 for kk, _ in events if kk == k) for k in wanted}
-    head = ", ".join(f"{n} {k.lower()}" for k, n in counts.items() if n)
-    lines = []
-    for kind, it in events[:20]:
-        price = f"R{it['price']:,.0f}" if it["price"] is not None else "price n/a"
-        if kind == "PRICE DROP":
-            price = f"R{it['was']:,.0f} to {price}"
-        tag = "LIMITED " if is_hot(it["title"]) else ""
-        lines.append(f"<b>{tag}{kind}</b> | {html.escape(it['store'])} | {price}\n"
-                     f'<a href="{html.escape(it["url"])}">{html.escape(it["title"])}</a>')
-    if len(events) > 20:
-        lines.append(f"...and {len(events) - 20} more")
-    plain = "\n".join(f"{k}: {it['title']} ({it['store']})" for k, it in events[:20])
-    notify(f"Pokemon update: {head}", plain, priority=3, tg_html="\n\n".join(lines))
-    state["last_msg"] = time.time()
+    """Which copy alerts for a shop, so no listing alerts twice: GitHub owns every shop it scans (all but
+    local_only_stores); the shops GitHub can't reach belong to whichever of the Mac or the Oracle server
+    config local_owner names ("mac" until a server is set up and verified)."""
+    if IS_GITHUB:
+        return True
+    me = "server" if IS_SERVER else "mac"
+    return CONFIG.get("local_owner", "mac") == me and store in set(CONFIG.get("local_only_stores", []))
 
 def heartbeat(state, results, deals):
     """If nothing has been sent for a while, send a short 'still watching' check-in (cloud only)."""
@@ -1172,9 +1285,10 @@ def cloud_store_watch(state):
     went_bad, came_back = [], []
     for st in active_stores():
         n = st["name"]
-        if n in blocked:
+        if n in blocked or not mine(n):
             continue
-        last = last_ok.get(n) or first.setdefault(n, now)
+        any_ok = (state.get("shop_stats", {}).get(n) or {}).get("last_ok")  # any successful check counts
+        last = max(last_ok.get(n) or 0, any_ok or 0) or first.setdefault(n, now)
         if now - last > limit:
             if n not in open_:
                 open_[n] = now
@@ -1188,12 +1302,128 @@ def cloud_store_watch(state):
         notify("Store watchdog: shops back", "Being checked again: " + ", ".join(came_back), channel="status")
     print(f"store watchdog: {len(open_)} shop(s) stale")
 
+# ---------------------------------------------------------------- config checks
+
+def validate_config(cfg, env=os.environ, github=None):
+    """Problems that would make the monitor silently do the wrong thing. Empty list = fine."""
+    github = IS_GITHUB if github is None else github
+    errs = []
+    stores = cfg.get("stores") or []
+    names = [s.get("name") for s in stores]
+    if not stores:
+        errs.append("config has no stores")
+    for dup in sorted({n for n in names if names.count(n) > 1}):
+        errs.append(f"store listed twice: {dup}")
+    for st in stores:
+        n = st.get("name") or "?"
+        if st.get("type") not in SCANNERS:
+            errs.append(f"{n}: unknown type {st.get('type')!r}")
+        if not str(st.get("url", "")).startswith("https://"):
+            errs.append(f"{n}: url must start with https://")
+        if st.get("currency", "ZAR") not in ("ZAR", *SYMBOL):
+            errs.append(f"{n}: unsupported currency {st.get('currency')!r}")
+        if st.get("intl_shipping") is not None and not isinstance(st["intl_shipping"], (int, float)):
+            errs.append(f"{n}: intl_shipping must be a number in the shop's currency")
+    for key in ("local_only_stores", "known_blocked", "cloud_verified"):
+        for n in cfg.get(key, []):
+            if n not in names:
+                errs.append(f"{key} names an unknown store: {n}")
+    for n in cfg.get("fast_30th", {}).get("skip", []):
+        if n not in names:
+            errs.append(f"fast_30th.skip names an unknown store: {n}")
+    for row in cfg.get("retail_refs_rand", []) + cfg.get("retail_exact", []):
+        try:
+            re.compile(row[0])
+            assert float(row[1]) > 0
+        except Exception:
+            errs.append(f"bad retail reference row: {row!r}")
+    if not 0 <= cfg.get("retail_tolerance", 0.15) <= 1:
+        errs.append("retail_tolerance must be between 0 and 1")
+    if cfg.get("fast_30th", {}).get("seconds", 5) < 5:
+        errs.append("fast_30th.seconds below 5 would hammer the shops")
+    duty = (cfg.get("international") or {}).get("import_duty_pct")
+    if duty is not None and not 0 <= duty <= 1:
+        errs.append("international.import_duty_pct must be a fraction (0.2 = 20%) or null")
+    if cfg.get("local_owner", "mac") not in ("mac", "server"):
+        errs.append("local_owner must be 'mac' or 'server'")
+    if github and not (env.get("TELEGRAM_TOKEN") and env.get("TELEGRAM_CHAT_ID")):
+        errs.append("TELEGRAM_TOKEN / TELEGRAM_CHAT_ID secrets are missing: alerts could not be sent")
+    return errs
+
+# ---------------------------------------------------------------- status report
+
+def _median_gap(beats):
+    gaps = sorted(b - a for a, b in zip(beats, beats[1:]))
+    return gaps[len(gaps) // 2] if gaps else None
+
+def _ago(ts):
+    if not ts:
+        return "never"
+    m = (time.time() - ts) / 60
+    return f"{m:.0f} min ago" if m < 120 else f"{m / 60:.1f} h ago"
+
+def _every(sec):
+    return "-" if sec is None else f"{sec:.0f} s" if sec < 120 else f"{sec / 60:.0f} min"
+
+def write_status(state):
+    """health/status.md (and the GitHub run summary in the cloud): is it running, which shops are checked,
+    how often in practice, what was rejected and why, and whether Telegram is getting through."""
+    role = "GitHub cloud" if IS_GITHUB else "Oracle server" if IS_SERVER else "Mac"
+    with STATE_LOCK:
+        shops = json.loads(json.dumps(state.get("shop_stats", {})))
+        stats = json.loads(json.dumps(state.get("stats", {})))
+        alerts = list(state.get("alert_log", []))[-5:]
+        outbox = len(state.get("outbox", [])) + len(OUTBOX)
+    rows = []
+    for st in CONFIG["stores"]:
+        n = st["name"]
+        if n in CONFIG.get("known_blocked", []):
+            rows.append(f"| {n} | blocked by the shop | - | - | - | - | - |")
+            continue
+        if n not in {x["name"] for x in active_stores()} or not mine(n):
+            continue  # another copy owns this shop
+        sh = shops.get(n, {})
+        stale = not sh.get("last_ok") or time.time() - sh["last_ok"] > CONFIG["updates"].get("store_stale_minutes", 45) * 60
+        rows.append(f"| {n} | {'NOT CHECKED' if stale else 'ok'} | {_ago(sh.get('last_ok'))} | "
+                    f"{_every(_median_gap(sh.get('beats_fast', [])))} | {_every(_median_gap(sh.get('beats_quick', [])))} | "
+                    f"{_every(_median_gap(sh.get('beats_scan', [])))} | {(sh.get('last_error') or '')[:60] if stale else ''} |")
+    c, r = stats.get("counts", {}), stats.get("rejected", {})
+    lines = [f"# Pokemon monitor status ({role})", "",
+             f"Generated {sast_now():%Y-%m-%d %H:%M} SAST. Counters are for {stats.get('day', 'today')} (SAST).", "",
+             f"- Discovered (new listings): {c.get('discovered', 0)}",
+             f"- Product-page checks: {c.get('verified_buyable', 0)} buyable, {c.get('verify_not_buyable', 0)} not buyable or failed",
+             f"- Alerts sent: {c.get('alerts_sent', 0)}; already alerted, skipped: {r.get('duplicate', 0)}",
+             f"- Rejected: " + (", ".join(f"{k} {v}" for k, v in sorted(r.items()) if k != "duplicate") or "none"),
+             f"- Telegram this run: {TG_STATS['sent']} sent, {TG_STATS['retried']} retries, {TG_STATS['failed']} failed; "
+             f"{outbox} waiting to resend",
+             f"- Collector values in use: {len(LAST_VALUES)}", "",
+             "| Shop | Status | Last good check | 30th check every | 1-min check every | Full scan every | Last error |",
+             "|---|---|---|---|---|---|---|", *rows, ""]
+    if alerts:
+        lines += ["Recent alerts:", ""] + [
+            f"- {dt.datetime.fromtimestamp(a['t']):%d %b %H:%M} {a['store']}: {a['title'][:60]} R{a['price']} "
+            f"({a['test']}{', estimate' if a.get('estimated') else ''})" for a in alerts]
+    text = "\n".join(lines) + "\n"
+    try:
+        (HERE / "health").mkdir(exist_ok=True)
+        (HERE / "health" / "status.md").write_text(text)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                f.write(text)
+    except OSError as e:
+        print("status report not written:", e, file=sys.stderr)
+
 # ---------------------------------------------------------------- main
 
 RUN_START = time.time()
 
 def main():
     args = set(sys.argv[1:])
+    problems = validate_config(CONFIG)
+    if problems:  # fail loudly (GitHub emails a failed run) instead of looking operational
+        for p in problems:
+            print(f"::error title=Config problem::{p}" if IS_GITHUB else f"CONFIG PROBLEM: {p}", file=sys.stderr)
+        sys.exit(2)
     if "--dry-run" not in args:
         cloud_watchdog()
     if "--test" in args:
@@ -1204,7 +1434,8 @@ def main():
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {"items": {}, "stores": {}}
     now = dt.datetime.now().isoformat(timespec="seconds")
     OUTBOX.clear()
-    flush_outbox(state)
+    if "--dry-run" not in args:
+        flush_outbox(state)
     fast = start_fast(state) if "--dry-run" not in args else (None, None)  # 30th every 5 s, from the start
 
     # a store's first successful scan only records what it has; announcing all of it would be spam
@@ -1241,12 +1472,14 @@ def main():
                 results[name] = localize(name, f.result())
                 state["stores"][name] = {"ok": True, "count": len(results[name]), "error": None, "at": now}
                 last_ok[name] = time.time()
+                record_check(state, name, True, "scan")
             except Exception as e:
                 prev = state["stores"].get(name, {})
                 state["stores"][name] = {"ok": False, "count": prev.get("count", 0),
                                          "error": str(e)[:200], "at": now}
                 if "429" in str(e):
                     cool[name] = time.time() + CONFIG["cooldown_minutes"] * 60
+                record_check(state, name, False, "scan", e)
                 print(f"[{name}] FAILED: {e}", file=sys.stderr)
     except cf.TimeoutError:
         print("scan budget exceeded; unfinished:", [n for f, n in futs.items() if not f.done()], file=sys.stderr)
@@ -1260,21 +1493,7 @@ def main():
     events = []
     for name, found in results.items():
         for it in found:
-            old = state["items"].get(it["key"])
-            if old is None:
-                it["first_seen"] = now
-                if name in known:
-                    events.append(("NEW", it))
-            else:
-                it["first_seen"] = old["first_seen"]
-                if it["in_stock"] and not old["in_stock"]:
-                    events.append(("BACK IN STOCK", it))
-                elif (it["in_stock"] and it["price"] and old.get("price")
-                      and it["price"] <= old["price"] * (1 - CONFIG["updates"]["price_drop_pct"] / 100)):
-                    it["was"] = old["price"]
-                    events.append(("PRICE DROP", it))
-            it["last_seen"] = now
-            state["items"][it["key"]] = it
+            merge_item(state, it, now, known, events)
 
     state["last_run"] = now
     for name, found in results.items():
@@ -1283,7 +1502,8 @@ def main():
 
     valuer = valuation.Valuer(get_json, state.setdefault("prices", {}), CONFIG["resale"])
     try:
-        local = {k: v for k, v in state["items"].items() if not v.get("intl")}  # no shipping/import in intl prices
+        # current SA listings only: delisted or overseas prices would distort the SA median
+        local = {k: v for k, v in state["items"].items() if not v.get("intl") and current(v)}
         deals = valuation.find_deals(local, valuer, CONFIG["resale"], want=is_30th)
     except Exception as e:
         print("valuation failed:", e, file=sys.stderr)
@@ -1295,11 +1515,32 @@ def main():
     if "--dry-run" in args:
         return
     LAST_DEALS[:] = deals
-    send_deals(deals, state)
+    LAST_VALUES.clear()
+    max_age = CONFIG.get("collector_max_age_hours", 48) * 3600
+    for d in deals:  # a collector value older than collector_max_age_hours is too stale to call a bargain
+        if d.get("value_asof") and time.time() - d["value_asof"] <= max_age:
+            LAST_VALUES[d["key"]] = (d["value"], f"lower of TCGplayer recent sales ~R{d['us_zar']:,.0f} and SA median "
+                                                 f"R{d['sa_median']:,.0f} across {d['sa_n']} shops, "
+                                                 f"{dt.datetime.fromtimestamp(d['value_asof']):%d %b}")
     if not seeding:
-        done = send_30th(events, deals, state)
-        snapshot_30th(state, deals)
-        send_updates([e for e in events if e[1]["key"] not in done], state)
+        # every buyable wanted listing is evaluated each full scan; the repeat rule stops repeats, so this
+        # also catches listings that only now qualify (new collector value, price drop, pre-order opened)
+        with STATE_LOCK:
+            cands = [dict(i) for i in state["items"].values()
+                     if i.get("in_stock") and current(i) and mine(i["store"]) and i["store"] in known and is_30th(i["title"])]
+        # The old code alerted only on changes, so listings already buyable at a good price were never
+        # announced. The first sweep under this policy sends them as ONE summary, not a burst of messages.
+        first_sweep = not state.get("alert_policy", 0) >= 2
+        if first_sweep:
+            DIGEST[:] = [True]
+        try:
+            sent = sum(consider(state, it, "scan") for it in cands)
+        finally:
+            found, DIGEST[:] = DIGEST[1:], []
+        if first_sweep:
+            send_digest(found)
+            state["alert_policy"] = 2
+        print(f"full-scan candidates: {len(cands)}, alerts {'in summary' if first_sweep else 'sent'}: {sent}")
     update_watchlist(deals, state)
     heartbeat(state, results, deals)
     until = next((float(a.split("=", 1)[1]) for a in args if a.startswith("--watch-until=")), 0)
@@ -1307,11 +1548,11 @@ def main():
     if watch_for:  # Mac: watch until this many seconds after the run started
         until = RUN_START + watch_for
     if until:
-        with STATE_LOCK:
-            STATE_FILE.write_text(json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1))  # save once before the long watch
+        save_state(state)  # once before the long watch
         watch_loop(state, until)
     stop_fast(*fast)
-    STATE_FILE.write_text(json.dumps(dict(state, outbox=state.get("outbox", []) + OUTBOX), indent=1))
+    save_state(state)
+    write_status(state)
     write_dashboard(state, deals)
     if IS_GITHUB:
         sys.stdout.flush()

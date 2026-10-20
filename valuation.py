@@ -61,6 +61,7 @@ class Valuer:
         self.get_json, self.cache, self.cfg = get_json, cache, cfg
         self.lookups = 0
         self._fx = None
+        self.asof = {}  # listing title -> when its TCGplayer price was fetched (epoch)
         # a slow TCGplayer once stalled the Mac run before it saved, so the cache never grew and every run
         # redid every lookup until the watchdog killed it (2026-10-12): stop looking up after this long
         self.deadline = time.time() + cfg.get("lookup_budget_seconds", 90)
@@ -97,16 +98,22 @@ class Valuer:
         q = " ".join(tokens(title))
         c = self.cache.get(q)
         if c and time.time() - c["t"] < self.cfg["price_refresh_hours"] * 3600:
+            self.asof[title] = c["t"]
             return c["m"]
         if self.lookups >= self.cfg["max_lookups_per_run"] or time.time() > self.deadline:
+            if c:
+                self.asof[title] = c["t"]  # older than the refresh window: the caller decides if it is too stale
             return c["m"] if c else None
         self.lookups += 1
         try:
             m = match(title, self.search(q))
         except Exception:
+            if c:
+                self.asof[title] = c["t"]
             return c["m"] if c else None
         time.sleep(0.3)
         self.cache[q] = {"t": time.time(), "m": m}
+        self.asof[title] = self.cache[q]["t"]
         return m
 
 
@@ -149,6 +156,7 @@ def find_deals(items, valuer, cfg, want=None):
                       "in_stock": it["in_stock"], "key": it["key"], "store": it["store"], "title": it["title"], "url": it["url"],
                           "price": it["price"], "us_zar": round(us_zar), "sa_median": round(sa_med),
                           "sa_n": len(others), "value": round(value), "profit": round(profit),
-                          "roi": round(roi, 3), "tcg_name": m["name"], "tcg_url": m["url"]})
+                          "roi": round(roi, 3), "tcg_name": m["name"], "tcg_url": m["url"],
+                          "value_asof": valuer.asof.get(it["title"])})
     deals.sort(key=lambda d: -d["profit"])
     return deals
