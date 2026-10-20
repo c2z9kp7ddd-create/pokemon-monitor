@@ -499,9 +499,15 @@ SCANNERS = {"shopify": scan_shopify, "woo": scan_woo, "checkers": scan_checkers,
 
 SECRETS_FILE = HERE / "secrets.json"  # telegram / discord credentials, written by setup_phone.py
 
-def notify(title, message, priority=3, click=None, tg_html=None, silent=False):
+def status_chat():
+    """Telegram group for monitor status and watchdog messages (Gideon, 2026-10-20: keep them out of the
+    product-alert chat). None until the group exists; status then falls back to the alert chat."""
+    return os.environ.get("TELEGRAM_STATUS_CHAT_ID") or CONFIG.get("telegram_status_chat_id")
+
+def notify(title, message, priority=3, click=None, tg_html=None, silent=False, channel="alerts"):
     """Send to every channel that is set up: Telegram, Discord, and ntfy if enabled.
-    silent: Telegram delivers without sound (used for the every-minute status)."""
+    silent: Telegram delivers without sound (used for the every-minute status).
+    channel: "alerts" (product news, the main chat) or "status" (the monitor's own health and checks)."""
     sec = json.loads(SECRETS_FILE.read_text()) if SECRETS_FILE.exists() else {}
     if os.environ.get("TELEGRAM_TOKEN"):  # cloud run: credentials come from GitHub secrets
         sec["telegram"] = {"token": os.environ["TELEGRAM_TOKEN"], "chat_id": os.environ.get("TELEGRAM_CHAT_ID")}
@@ -517,11 +523,12 @@ def notify(title, message, priority=3, click=None, tg_html=None, silent=False):
         except Exception as e:
             print("telegram chat lookup failed:", e, file=sys.stderr)
     if tg and tg.get("chat_id"):
+        chat = (status_chat() or tg["chat_id"]) if channel == "status" else tg["chat_id"]
         text = f"<b>{html.escape(title)}</b>\n" + (tg_html or html.escape(message))
         if click:
             text += f'\n\n<a href="{html.escape(click)}">Open product</a>'
         sends.append(("telegram", f"https://api.telegram.org/bot{tg['token']}/sendMessage",
-                      {"chat_id": tg["chat_id"], "text": text, "parse_mode": "HTML",
+                      {"chat_id": chat, "text": text, "parse_mode": "HTML",
                        "disable_web_page_preview": bool(tg_html), "disable_notification": silent}))
     if sec.get("discord_webhook"):
         content = f"**{title}**\n{message}" + (f"\n{click}" if click else "")
@@ -541,7 +548,7 @@ def notify(title, message, priority=3, click=None, tg_html=None, silent=False):
             print(f"notify via {name} failed:", e, file=sys.stderr)
             if name == "telegram":  # kept and retried next run (see flush_outbox)
                 OUTBOX.append({"title": title, "message": message, "click": click,
-                               "tg_html": tg_html, "t": time.time()})
+                               "tg_html": tg_html, "t": time.time(), "channel": channel})
 
 OUTBOX = []  # Telegram messages that failed this run
 
@@ -551,7 +558,7 @@ def flush_outbox(state):
     pending = [m for m in state.pop("outbox", []) if time.time() - m["t"] < 86400]
     for m in pending:
         title = m["title"] if m["title"].endswith("(delayed)") else m["title"] + " (delayed)"
-        notify(title, m["message"], click=m["click"], tg_html=m["tg_html"])
+        notify(title, m["message"], click=m["click"], tg_html=m["tg_html"], channel=m.get("channel", "alerts"))
 
 def fmt(it):
     price = f"R{it['price']:,.2f}" if it["price"] is not None else "price n/a"
@@ -758,7 +765,7 @@ def minute_status(state, stores_checked, polled):
     if len(live) > 10:
         lines.append(f"...and {len(live) - 10} more")
         links.append(f"...and {len(live) - 10} more")
-    notify("Pokemon check", "\n".join(lines), priority=1, silent=True, tg_html="\n\n".join(links))
+    notify("Pokemon check", "\n".join(lines), priority=1, silent=True, tg_html="\n\n".join(links), channel="status")
 
 def _safe_poll(w, cool):
     try:
@@ -1096,7 +1103,7 @@ def heartbeat(state, results, deals):
     buyable = sum(i["in_stock"] for i in tracked)
     notify("Pokemon monitor: still watching",
            f"{len(results)} stores checked. Tracking {len(tracked)} English 30th Anniversary listings, "
-           f"{buyable} buyable. You'll get a message the moment another one is.")
+           f"{buyable} buyable. You'll get a message the moment another one is.", channel="status")
     state["last_msg"] = time.time()
 
 def cloud_watchdog():
@@ -1123,7 +1130,7 @@ def cloud_watchdog():
         flag = HERE / ".cloud_warned"
         if len(done) == 3 and all(r.get("conclusion") != "success" for r in done) and CONFIG["updates"].get("status_messages"):
             if not flag.exists():
-                notify("Pokemon monitor problem", "The last 3 cloud runs did not finish. Alerts may be missed until this is fixed.")
+                notify("Pokemon monitor problem", "The last 3 cloud runs did not finish. Alerts may be missed until this is fixed.", channel="status")
                 flag.write_text("1")
         elif done and done[0].get("conclusion") == "success" and flag.exists():
             flag.unlink()
@@ -1144,10 +1151,10 @@ def check_health(state, results, skipped=()):
     if state["bad_runs"] == 6:
         notify("Pokemon monitor problem",
                f"Only {len(results)} of {n} stores answered for the last 6 scans. "
-               "Deal alerts may be missed until this clears.")
+               "Deal alerts may be missed until this clears.", channel="status")
         state["warned"] = True
     elif not bad and state.get("warned"):
-        notify("Pokemon monitor back to normal", f"{len(results)} of {n} stores answering again.")
+        notify("Pokemon monitor back to normal", f"{len(results)} of {n} stores answering again.", channel="status")
         state["warned"] = False
 
 # ---------------------------------------------------------------- main

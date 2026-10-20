@@ -59,10 +59,12 @@ def now_s():
 
 
 def creds():
+    """Token and the chat for guard messages: the status group when it exists, else the alert chat."""
+    status = os.environ.get("TELEGRAM_STATUS_CHAT_ID") or json.loads((HERE / "config.json").read_text()).get("telegram_status_chat_id")
     if os.environ.get("TELEGRAM_TOKEN"):
-        return os.environ["TELEGRAM_TOKEN"], os.environ.get("TELEGRAM_CHAT_ID")
+        return os.environ["TELEGRAM_TOKEN"], status or os.environ.get("TELEGRAM_CHAT_ID")
     tg = json.loads((HERE / "secrets.json").read_text()).get("telegram", {})
-    return tg.get("token"), tg.get("chat_id")
+    return tg.get("token"), status or tg.get("chat_id")
 
 
 def tg_call(token, method, params=None):
@@ -224,9 +226,16 @@ def check_telegram():
     if not chat:
         problems["tg_chat"] = "Telegram has no chat saved for alerts. Send /start to the bot, then run setup_phone.py."
         return problems
-    ok, kind, detail = tg_call(token, "getChat", {"chat_id": chat})
+    alert_chat = (os.environ.get("TELEGRAM_CHAT_ID") if os.environ.get("TELEGRAM_TOKEN")
+                  else json.loads((HERE / "secrets.json").read_text()).get("telegram", {}).get("chat_id"))
+    ok, kind, detail = tg_call(token, "getChat", {"chat_id": alert_chat})
     if not ok:
         problems["tg_chat"] = f"The bot can't reach your Telegram chat ({detail}). Unblock the bot or send it /start."
+    if chat != alert_chat:  # the status group (watchdog and status messages) is checked too
+        ok, kind, detail = tg_call(token, "getChat", {"chat_id": chat})
+        if not ok:
+            problems["tg_status_chat"] = (f"The bot can't post in the 'Polymarket bot security updates' group ({detail}). "
+                                          "Add the bot back to the group.")
     if not CLOUD:
         try:
             box = json.loads((HERE / "state.json").read_text()).get("outbox", [])

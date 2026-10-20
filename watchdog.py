@@ -300,13 +300,13 @@ def main():
         text = "\n".join(other)
         if shops:
             text += ("\n\n" if other else "") + "Shops not being monitored:\n" + "\n".join(shops)
-        monitor.notify("Pokemon monitor problem", text)
+        monitor.notify("Pokemon monitor problem", text, channel="status")
         for k, v in report.items():
             wd["open"][k] = {"since": now, "text": v}
             pending.pop(k, None)
     if cleared:
         texts = [wd["open"][k]["text"] for k in cleared]
-        monitor.notify("Pokemon monitor fixed", "Working again: " + " ".join(texts)[:600])
+        monitor.notify("Pokemon monitor fixed", "Working again: " + " ".join(texts)[:600], channel="status")
         for k in cleared:
             del wd["open"][k]
     WD_STATE.write_text(json.dumps(wd, indent=1))
