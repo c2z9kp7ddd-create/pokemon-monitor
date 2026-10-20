@@ -220,9 +220,21 @@ def verify_listing(it):
         status = PREORDER
     return status, price, detail
 
+_LAST_SHOPIFY_VERIFY = [0.0]
+
+def _pace_shopify_verify():
+    """Cloud: Shopify throttles GitHub's IPs, and a burst of product-page checks (first run: ~20 in a row next
+    to the 5-second checks) got 429s. Space them out; a check that still fails is retried next full scan."""
+    gap = CONFIG.get("cloud_shopify_verify_gap_seconds", 3) if IS_GITHUB else 0
+    wait = _LAST_SHOPIFY_VERIFY[0] + gap - time.time()
+    if wait > 0:
+        time.sleep(wait)
+    _LAST_SHOPIFY_VERIFY[0] = time.time()
+
 def _verify(kind, st, pid, url, it):
     if kind == "shopify":
         with SHOPIFY_GATE:
+            _pace_shopify_verify()
             p = get_json(url.split("?")[0] + ".js", tries=1, timeout=15)
         variants = p.get("variants") or []
         avail = [v for v in variants if v.get("available")]

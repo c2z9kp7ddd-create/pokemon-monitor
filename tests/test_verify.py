@@ -85,3 +85,20 @@ class Verify(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Pacing(unittest.TestCase):
+    def test_cloud_spaces_shopify_product_checks(self):
+        slept = []
+        with mock.patch.object(monitor, "IS_GITHUB", True), \
+             mock.patch.object(monitor.time, "sleep", slept.append), \
+             mock.patch.object(monitor.time, "time", side_effect=[100.0, 100.0, 101.0, 103.0]):
+            monitor._LAST_SHOPIFY_VERIFY[0] = 0.0
+            monitor._pace_shopify_verify()      # first check: no wait
+            monitor._pace_shopify_verify()      # 1 s later: waits the remaining 2 s
+        self.assertEqual(slept, [2.0])
+
+    def test_mac_does_not_wait(self):
+        with mock.patch.object(monitor, "IS_GITHUB", False), mock.patch.object(monitor.time, "sleep", side_effect=AssertionError):
+            monitor._pace_shopify_verify()
+            monitor._pace_shopify_verify()
