@@ -1195,8 +1195,17 @@ tr.out{{opacity:.55}}details{{margin-top:20px;color:var(--mut)}}ul{{padding-left
 q.oninput=()=>{{const v=q.value.toLowerCase();for(const r of t.rows)r.style.display=r.textContent.toLowerCase().includes(v)?'':'none'}}
 </script></body></html>""")
 
+def server_owned():
+    """Shops the Oracle server checks and alerts for: config server_stores (those proven to answer the
+    server; 2026-10-20 only Geek Zone, the other Mac-only shops refuse data-centre IPs), or every
+    Mac-only shop once local_owner is "server"."""
+    local_only = set(CONFIG.get("local_only_stores", []))
+    return set(CONFIG.get("server_stores", [])) | (local_only if CONFIG.get("local_owner") == "server" else set())
+
 def active_stores():
     local_only = set(CONFIG.get("local_only_stores", []))
+    if IS_SERVER:  # the small free server only scans the shops it owns
+        return [s for s in CONFIG["stores"] if s["name"] in server_owned()]
     return [s for s in CONFIG["stores"] if not (IS_GITHUB and s["name"] in local_only)]
 
 def probe_local_only():
@@ -1218,8 +1227,9 @@ def mine(store):
     config local_owner names ("mac" until a server is set up and verified)."""
     if IS_GITHUB:
         return True
-    me = "server" if IS_SERVER else "mac"
-    return CONFIG.get("local_owner", "mac") == me and store in set(CONFIG.get("local_only_stores", []))
+    if IS_SERVER:
+        return store in server_owned()
+    return store in set(CONFIG.get("local_only_stores", [])) - server_owned()
 
 def heartbeat(state, results, deals):
     """If nothing has been sent for a while, send a short 'still watching' check-in (cloud only)."""

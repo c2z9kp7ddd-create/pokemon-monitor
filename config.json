@@ -457,5 +457,8 @@
   "retail_exact": [],
   "collector_max_age_hours": 48,
   "local_owner": "mac",
-  "telegram_status_chat_id": "-5560345589"
+  "telegram_status_chat_id": "-5560345589",
+  "server_stores": [
+    "Geek Zone"
+  ]
 }

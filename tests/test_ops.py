@@ -98,15 +98,28 @@ class Config(unittest.TestCase):
 class Ownership(unittest.TestCase):
     def test_mac_owns_only_local_only_shops(self):
         with mock.patch.object(monitor, "IS_GITHUB", False), mock.patch.object(monitor, "IS_SERVER", False):
-            self.assertTrue(monitor.mine("Geek Zone"))
+            self.assertTrue(monitor.mine("Checkers"))
             self.assertFalse(monitor.mine("Takealot"))
+            self.assertFalse(monitor.mine("Geek Zone"))                  # moved to the server (server_stores)
 
-    def test_server_takes_over_only_when_config_says_so(self):
+    def test_server_owns_server_stores_and_all_local_only_when_config_says_so(self):
         with mock.patch.object(monitor, "IS_GITHUB", False), mock.patch.object(monitor, "IS_SERVER", True):
-            self.assertFalse(monitor.mine("Geek Zone"))                    # local_owner is still "mac"
+            self.assertTrue(monitor.mine("Geek Zone"))                    # server_stores
+            self.assertFalse(monitor.mine("Checkers"))                    # refuses data-centre IPs: stays on the Mac
+            self.assertEqual({s["name"] for s in monitor.active_stores()}, set(monitor.CONFIG["server_stores"]))
             with mock.patch.dict(monitor.CONFIG, {"local_owner": "server"}):
-                self.assertTrue(monitor.mine("Geek Zone"))
+                self.assertTrue(monitor.mine("Checkers"))
                 self.assertFalse(monitor.mine("Takealot"))               # never duplicates the cloud
+
+    def test_no_shop_has_two_owners(self):
+        owners = {}
+        for role in ("github", "server", "mac"):
+            with mock.patch.object(monitor, "IS_GITHUB", role == "github"), \
+                 mock.patch.object(monitor, "IS_SERVER", role == "server"):
+                for st in monitor.active_stores():
+                    if monitor.mine(st["name"]):
+                        owners.setdefault(st["name"], []).append(role)
+        self.assertEqual({n: r for n, r in owners.items() if len(r) > 1}, {})
 
     def test_cloud_never_scans_mac_only_shops(self):
         with mock.patch.object(monitor, "IS_GITHUB", True):
