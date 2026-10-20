@@ -39,4 +39,9 @@ def main():
     print(f"Connected to group '{title}' ({gid}). Commit and push config.json so the cloud uses it too.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except OSError as e:  # URLError, SSL and timeouts are all OSErrors
+        why = ("this network intercepts secure connections (certificate not trusted), so it blocks Telegram"
+               if "CERTIFICATE_VERIFY_FAILED" in str(e) else f"Telegram could not be reached ({e})")
+        sys.exit(f"Could not connect: {why}.\nSwitch the Mac to your phone's hotspot or home Wi-Fi and run it again.")
