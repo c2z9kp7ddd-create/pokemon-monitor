@@ -18,10 +18,21 @@ class Targets(unittest.TestCase):
             self.check(t, "30TH ANNIVERSARY")
 
     def test_delta_reign_products(self):
+        # 2026-10-20: Delta Reign ETBs and booster boxes only
         for t in ["Pokemon TCG Mega Evolution - Delta Reign Elite Trainer Box",
-                  "Pokemon: Mega Evolution—Delta Reign Booster Pack",   # em dash glued the words
-                  "Delta Reign Booster Display (36 packs)"]:
+                  "Pokemon: Mega Evolution—Delta Reign Booster Box",     # em dash glued the words
+                  "Delta Reign Booster Display (36 packs)",
+                  "Pokemon TCG: Mega Evolution - Delta Reign Pokemon Center Elite Trainer Box",
+                  "Pokemon: Delta Reign Booster Box Case"]:
             self.check(t, "DELTA REIGN")
+        for t in ["Pokemon TCG: Delta Reign - 3-Pack blister (Pre-Order)",
+                  "Pokemon TCG: Delta Reign - Premium Blister",
+                  "Pokemon: Mega Evolution—Delta Reign Booster Pack",
+                  "Pokemon-TCG Mega Evolution Delta Reign Booster *Pre-Order*",
+                  "Pre-Order: Pokemon TCG: Mega Evolution - Delta Reign Premium Checklane",
+                  "Pokemon TCG: Mega Evolution - Delta Reign Booster Bundle",
+                  "Pokemon TCG: Mega Evolution - Delta Reign Build & Battle Box"]:
+            self.check(t, None)
 
     def test_generic_boxes_and_etbs(self):
         self.check("Pokemon Scarlet & Violet Prismatic Evolutions Elite Trainer Box", "ETB")

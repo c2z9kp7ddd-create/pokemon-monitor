@@ -17,7 +17,7 @@ A listing alerts only when ALL of these hold **[code: matching.py, pricing.py, m
    | Target | Matches | Price test |
    |---|---|---|
    | 30TH ANNIVERSARY | "30th", "30 years" (30th Celebration ETBs, tins, bundles, collections...) | retail OR collector |
-   | DELTA REIGN | "Delta Reign" | retail OR collector |
+   | DELTA REIGN | "Delta Reign" ETBs and booster boxes / displays / cases only (no blisters, packs, checklanes, bundles; 2026-10-20) | retail OR collector |
    | BOOSTER BOX | "booster box", "booster display", "36 packs", any set | collector only |
    | ETB | "elite trainer", "ETB", any set | collector only |
 
