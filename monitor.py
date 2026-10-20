@@ -1157,6 +1157,37 @@ def check_health(state, results, skipped=()):
         notify("Pokemon monitor back to normal", f"{len(results)} of {n} stores answering again.", channel="status")
         state["warned"] = False
 
+def cloud_store_watch(state):
+    """Cloud watchdog (Gideon, 2026-10-20: it must work with the Mac closed). Every cloud run checks when each
+    cloud shop was last scanned successfully; one message when a shop goes stale, one when it recovers.
+    Messages go to the status group."""
+    if not IS_CLOUD:
+        return
+    now = time.time()
+    limit = CONFIG["updates"].get("store_stale_minutes", 45) * 60
+    last_ok = state.setdefault("last_ok", {})
+    first = state.setdefault("watch_first_seen", {})  # grace period for shops the cloud hasn't scanned yet
+    open_ = state.setdefault("store_alerts", {})
+    blocked = set(CONFIG.get("known_blocked", []))
+    went_bad, came_back = [], []
+    for st in active_stores():
+        n = st["name"]
+        if n in blocked:
+            continue
+        last = last_ok.get(n) or first.setdefault(n, now)
+        if now - last > limit:
+            if n not in open_:
+                open_[n] = now
+                err = (state["stores"].get(n) or {}).get("error") or "no successful scan"
+                went_bad.append(f"{n}: no successful scan for {(now - last) / 60:.0f} min ({err[:80]})")
+        elif n in open_:
+            came_back.append(f"{n} (down since {dt.datetime.fromtimestamp(open_.pop(n)):%d %b %H:%M})")
+    if went_bad:
+        notify("Store watchdog: shops not being checked", "\n".join(went_bad), channel="status")
+    if came_back:
+        notify("Store watchdog: shops back", "Being checked again: " + ", ".join(came_back), channel="status")
+    print(f"store watchdog: {len(open_)} shop(s) stale")
+
 # ---------------------------------------------------------------- main
 
 RUN_START = time.time()
@@ -1223,6 +1254,7 @@ def main():
     SCAN_DEADLINE[0] = float("inf")
 
     check_health(state, results, skipped)
+    cloud_store_watch(state)
 
     seeding = not state["items"]
     events = []
