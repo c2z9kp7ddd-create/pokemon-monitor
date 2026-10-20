@@ -33,8 +33,8 @@ ACCESSORY = re.compile(r"\b(protector|acrylic|magnetic|storage box|storage case|
 LONE_BINDER = re.compile(r"\bbinder\b", re.I)
 # Never alert, whatever the price (Gideon): (pattern, reason)
 NEVER = [
-    (re.compile(r"pitch black.*(elite trainer|\betb\b)|(elite trainer|\betb\b).*pitch black", re.I),
-     "Pitch Black ETBs (Gideon, 2026-10-20)"),
+    # no leading \b: Toys R Us glues set names together ("Mega EvolutionPitch Black")
+    (re.compile(r"pitch\W*black", re.I), "anything Pitch Black (Gideon, 2026-10-20)"),
 ]
 
 

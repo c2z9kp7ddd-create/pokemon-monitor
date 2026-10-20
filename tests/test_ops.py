@@ -182,3 +182,29 @@ class ScanReport(unittest.TestCase):
         self.assertEqual(sent[0][2]["channel"], "status")
         self.assertTrue(sent[0][2]["silent"])
         self.assertIn("shops checked", sent[0][1])
+
+
+class ChatSplit(unittest.TestCase):
+    """Deal alerts -> the private chat; scanning updates -> the status group."""
+    def setUp(self):
+        isolate(self)
+
+    def send(self, channel):
+        bodies = []
+        with mock.patch.object(monitor, "_post_with_retry", lambda url, body, name: bodies.append(body)), \
+             mock.patch.dict(os.environ, {"TELEGRAM_TOKEN": "t", "TELEGRAM_CHAT_ID": "111"}), \
+             mock.patch.object(monitor, "status_chat", return_value="-222"):
+            monitor.notify("x", "y", channel=channel)
+        return [b["chat_id"] for b in bodies if "chat_id" in b]
+
+    def test_alerts_go_to_the_private_chat(self):
+        self.assertEqual(self.send("alerts"), ["111"])
+
+    def test_scan_updates_go_to_the_group(self):
+        self.assertEqual(self.send("status"), ["-222"])
+
+    def test_pitch_black_messages_are_not_resent(self):
+        state = {"outbox": [{"title": "ETB BELOW COLLECTOR VALUE: X", "message": "Pokemon Pitch Black Elite Trainer Box",
+                             "click": None, "tg_html": None, "t": time.time()}]}
+        with mock.patch.object(monitor, "notify", side_effect=AssertionError("must not resend")):
+            monitor.flush_outbox(state)

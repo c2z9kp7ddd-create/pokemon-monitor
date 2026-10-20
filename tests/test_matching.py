@@ -73,13 +73,18 @@ class Targets(unittest.TestCase):
         self.check("Pokemon 25th Anniversary Collection", None)
         self.check("Empty Elite Trainer Box", None)
 
-    def test_pitch_black_etbs_never_alert(self):
+    def test_nothing_pitch_black_ever_alerts(self):
         for t in ["Pokemon TCG Mega Evolution Pitch Black Elite Trainer Box",
                   "Pokemon: Mega Evolution—Pitch Black: Pokemon Center Elite Trainer Box",
                   "Pokemon Pitch Black ETB",
                   "Elite Trainer Box - Pitch Black (Type May Vary)"]:
             self.check(t, None)
-        self.check("Pokemon Mega Evolution Pitch Black Booster Box", "BOOSTER BOX")   # only the ETBs are out
+        self.check("Pokemon Mega Evolution Pitch Black Booster Box", None)          # nothing Pitch Black at all
+        self.check("Pokemon: Mega Evolution—Pitch Black Booster Display", None)
+        self.check("Pokemon: Mega EvolutionPitch Black: Booster Box", None)          # Toys R Us spelling
+        self.check("Pokemon: Mega EvolutionPitch Black: Elite Trainer Box", None)
+        self.check("Pokemon PitchBlack ETB", None)
+        self.check("Pokemon Pitch-Black Booster Box", None)
         self.check("Pokemon Mega Evolution Chaos Rising Elite Trainer Box", "ETB")
 
     def test_is_tcg_drops_singles_and_merch(self):

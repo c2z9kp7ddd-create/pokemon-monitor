@@ -779,7 +779,9 @@ OUTBOX = []  # Telegram messages that failed this run
 def flush_outbox(state):
     """Resend Telegram messages that failed on an earlier run (e.g. on a network that blocks Telegram).
     Anything older than a day is dropped: stock news that old is no use."""
-    pending = [m for m in state.pop("outbox", []) if time.time() - m["t"] < 86400]
+    pending = [m for m in state.pop("outbox", []) if time.time() - m["t"] < 86400
+               # a product Gideon has since ruled out (e.g. Pitch Black) is not resent either
+               and not any(p.search(f"{m.get('title', '')} {m.get('message', '')}") for p, _ in matching.NEVER)]
     for m in pending:
         title = m["title"] if m["title"].endswith("(delayed)") else m["title"] + " (delayed)"
         notify(title, m["message"], click=m["click"], tg_html=m["tg_html"], channel=m.get("channel", "alerts"))
