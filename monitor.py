@@ -971,6 +971,10 @@ def watch_loop(state, until):
         t0 = time.time()
         if CONFIG["quick_scan_seconds"] and (quick is None or quick.done()):
             quick = qs.submit(quick_scan, state)  # never two at once; a slow one just skips a beat
+        try:
+            scan_report(state)  # self-throttled (status_report_minutes); here so it isn't tied to the scan cycle
+        except Exception as e:
+            print("scan report failed:", e, file=sys.stderr)
         cool = state.setdefault("cooldown", {})
         names = {st["name"] for st in active_stores()}  # cloud leaves Mac-only shops to the Mac
         # cloud: Shopify restocks show up in the 5-second checks (in-stock first), so their product pages
@@ -1244,9 +1248,11 @@ def heartbeat(state, results, deals):
     state["last_msg"] = time.time()
 
 def scan_report(state):
-    """Hourly scanning update to the separate status group (never to the deal chat): shops checked,
+    """Scanning update every status_report_minutes (4, Gideon 2026-10-20) to the separate status group (never to the deal chat): shops checked,
     failing shops, alerts and why listings were turned down. Sends nothing until telegram_status_chat_id is set."""
     every = CONFIG["updates"].get("status_report_minutes", 0)
+    if not IS_CLOUD and not CONFIG["updates"].get("mac_status_report"):
+        return  # the Mac's problems still reach the group through the watchdog; routine updates come from the cloud copies
     if not every or not status_chat() or time.time() - state.get("last_status_report", 0) < every * 60:
         return
     role = "Cloud" if IS_GITHUB else "Server" if IS_SERVER else "Mac"
