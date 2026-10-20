@@ -183,18 +183,26 @@ class ScanReport(unittest.TestCase):
              mock.patch.dict(monitor.CONFIG["updates"], {"status_report_minutes": 60}):
             monitor.scan_report(fresh_state())
 
-    def test_hourly_to_the_status_group_only(self):
+    def test_periodic_to_the_status_group_only(self):
         sent = []
         s = fresh_state()
-        with mock.patch.object(monitor, "status_chat", return_value="-100123"), \
+        with mock.patch.object(monitor, "IS_CLOUD", True), \
+             mock.patch.object(monitor, "status_chat", return_value="-100123"), \
              mock.patch.object(monitor, "notify", lambda t, m, **k: sent.append((t, m, k))), \
-             mock.patch.dict(monitor.CONFIG["updates"], {"status_report_minutes": 60}):
+             mock.patch.dict(monitor.CONFIG["updates"], {"status_report_minutes": 4}):
             monitor.scan_report(s)
-            monitor.scan_report(s)          # within the hour: nothing
+            monitor.scan_report(s)          # within 4 minutes: nothing
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0][2]["channel"], "status")
         self.assertTrue(sent[0][2]["silent"])
         self.assertIn("shops checked", sent[0][1])
+
+    def test_mac_sends_no_routine_update(self):
+        with mock.patch.object(monitor, "IS_CLOUD", False), \
+             mock.patch.object(monitor, "status_chat", return_value="-100123"), \
+             mock.patch.object(monitor, "notify", side_effect=AssertionError("must not send")), \
+             mock.patch.dict(monitor.CONFIG["updates"], {"status_report_minutes": 4}):
+            monitor.scan_report(fresh_state())
 
 
 class ChatSplit(unittest.TestCase):
