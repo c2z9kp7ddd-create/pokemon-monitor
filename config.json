@@ -82,7 +82,8 @@
     "auction winner",
     "reserved for",
     "mystery spin",
-    "sleeve "
+    "sleeve ",
+    "re-ment"
   ],
   "stores": [
     {
@@ -266,6 +267,16 @@
       "name": "Galaxy Boxx",
       "type": "woo",
       "url": "https://galaxyboxx.co.za"
+    },
+    {
+      "name": "Magic The Trading",
+      "type": "woo",
+      "url": "https://www.magicthetrading.co.za"
+    },
+    {
+      "name": "Otaku Kulture",
+      "type": "shopify",
+      "url": "https://otakukulture.co.za"
     },
     {
       "name": "The Jokers House",
