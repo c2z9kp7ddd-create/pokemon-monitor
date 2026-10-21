@@ -311,7 +311,7 @@
         "/gp/bestsellers/toys/28003644031",
         "/gp/new-releases/toys/28003644031"
       ],
-      "request_gap_seconds": 3,
+      "request_gap_seconds": 8,
       "max_product_pages": 20,
       "watch_every_seconds": 180,
       "asins": [

@@ -773,7 +773,9 @@ def amazon_product(store, asin, base="https://www.amazon.co.za"):
     h = amazon_get(url)
     t = re.search(r'id="productTitle"[^>]*>\s*([^<]+)', h)
     if not t:
-        raise ValueError("Amazon product page without a title (layout changed or blocked)")
+        if re.search(r"not a robot|captcha|validateCaptcha", h, re.I):
+            raise ValueError("Amazon showed its bot check (not worked around; retried next pass)")
+        raise ValueError("Amazon product page without a title (layout changed)")
     price = re.search(r'"priceAmount":([\d.]+)', h)
     avail = re.search(r'id="availability"[^>]*>(.*?)</div>', h, re.S)
     avail_txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", avail.group(1))).strip()[:80] if avail else ""
