@@ -229,3 +229,38 @@ class ChatSplit(unittest.TestCase):
                              "click": None, "tg_html": None, "t": time.time()}]}
         with mock.patch.object(monitor, "notify", side_effect=AssertionError("must not resend")):
             monitor.flush_outbox(state)
+
+
+class CartLinks(unittest.TestCase):
+    """One-tap add-to-cart links in alerts (Gideon 2026-10-21); nothing is bought automatically."""
+    def shop(self, kind):
+        return next(s for s in monitor.CONFIG["stores"] if s["type"] == kind)
+
+    def test_shopify_permalink_uses_the_verified_variant(self):
+        st = self.shop("shopify")
+        it = {"store": st["name"], "key": f"{st['name']}|123", "url": "https://example-shop.co.za/products/etb",
+              "_variant": 456}
+        self.assertEqual(monitor.cart_link(it), "https://example-shop.co.za/cart/456:1")
+
+    def test_woo_simple_product(self):
+        st = self.shop("woo")
+        it = {"store": st["name"], "key": f"{st['name']}|902", "url": st["url"] + "/product/x", "_woo_type": "simple"}
+        self.assertEqual(monitor.cart_link(it), st["url"].rstrip("/") + "/?add-to-cart=902&quantity=1")
+
+    def test_woo_variable_product_gets_no_cart_link(self):
+        st = self.shop("woo")
+        it = {"store": st["name"], "key": f"{st['name']}|902", "url": st["url"] + "/product/x", "_woo_type": "variable"}
+        self.assertIsNone(monitor.cart_link(it))
+
+    def test_other_shops_get_no_cart_link(self):
+        st = self.shop("takealot")
+        it = {"store": st["name"], "key": f"{st['name']}|1", "url": "https://www.takealot.com/x/PLID1"}
+        self.assertIsNone(monitor.cart_link(it))
+
+    def test_alert_message_shows_the_cart_link_first(self):
+        text = []
+        with mock.patch.dict(monitor.os.environ, {"TELEGRAM_TOKEN": "t", "TELEGRAM_CHAT_ID": "1"}), \
+             mock.patch.object(monitor.urllib.request, "urlopen",
+                               lambda req, **k: text.append(monitor.json.loads(req.data)["text"]) or io.BytesIO(b"{}")):
+            monitor.notify("T", "m", click="https://shop/p", cart="https://shop/cart/1:1")
+        self.assertLess(text[0].index("ADD TO CART"), text[0].index("Open product"))

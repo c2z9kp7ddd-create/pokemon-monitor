@@ -241,11 +241,14 @@ def _verify(kind, st, pid, url, it):
         if not p.get("available") or (variants and not avail):
             return OUT_OF_STOCK, (p.get("price") or 0) / 100 or None, "product page: sold out"
         cents = min(v.get("price") or 0 for v in avail) if avail else p.get("price") or 0
+        if avail:  # the variant the price belongs to, for the one-tap cart link
+            it["_variant"] = min(avail, key=lambda v: v.get("price") or 0).get("id")
         return IN_STOCK, cents / 100 or None, "product page: available"
     if kind == "woo":
         p = get_json(f"{st['url']}/wp-json/wc/store/v1/products/{pid}", tries=1, timeout=st.get("timeout", 20))
         pr = p.get("prices") or {}
         price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
+        it["_woo_type"] = p.get("type")  # only simple products can go straight into the cart by link
         if not p.get("is_purchasable", True):
             return OUT_OF_STOCK, price, "product: not purchasable"
         if p.get("is_on_backorder"):
@@ -289,6 +292,28 @@ def _verify(kind, st, pid, url, it):
     return UNKNOWN, None, f"no product-level check for {kind} shops"
 
 # ---------------------------------------------------------------- the one alert path
+
+def cart_link(it):
+    """One-tap link that puts the item in the shop's cart (Gideon 2026-10-21). Gideon still checks out and
+    pays himself; nothing is bought automatically. Shopify: cart permalink /cart/<variant>:1 (opens checkout
+    with the item). WooCommerce: ?add-to-cart=<id> (simple products only). Other shops: None."""
+    st = STORE_BY_NAME.get(it["store"]) or {}
+    kind, pid = st.get("type"), it["key"].split("|", 1)[1]
+    try:
+        if kind == "shopify":
+            v = it.get("_variant")
+            if not v:  # the caller verified the listing another way: one product read to find the variant
+                p = get_json(it["url"].split("?")[0] + ".js", tries=1, timeout=10)
+                avail = [x for x in p.get("variants") or [] if x.get("available")]
+                v = min(avail, key=lambda x: x.get("price") or 0).get("id") if avail else None
+            if v:
+                u = urllib.parse.urlsplit(it["url"])
+                return f"{u.scheme}://{u.netloc}/cart/{int(v)}:1"
+        elif kind == "woo" and it.get("_woo_type", "simple") == "simple" and pid.isdigit():
+            return f"{st['url'].rstrip('/')}/?add-to-cart={pid}&quantity=1"
+    except Exception as e:
+        print("cart link failed:", it["store"], e, file=sys.stderr)
+    return None
 
 LAST_VALUES = {}  # listing key -> (collector value rand, source text), from the latest valuation
 
@@ -336,7 +361,7 @@ def consider(state, it, source, verified=None):
     if DIGEST and DIGEST[0] is not None:
         DIGEST.append((it, price, lab, dec, status))
     else:
-        notify(title, plain, priority=5, click=it["url"], tg_html=rich)
+        notify(title, plain, priority=5, click=it["url"], tg_html=rich, cart=cart_link(it))
     stat(state, "alerts_sent")
     with STATE_LOCK:
         state["last_msg"] = time.time()
@@ -696,7 +721,7 @@ def status_chat():
     product-alert chat). None until the group exists; status then falls back to the alert chat."""
     return os.environ.get("TELEGRAM_STATUS_CHAT_ID") or CONFIG.get("telegram_status_chat_id")
 
-def notify(title, message, priority=3, click=None, tg_html=None, silent=False, channel="alerts"):
+def notify(title, message, priority=3, click=None, tg_html=None, silent=False, channel="alerts", cart=None):
     """Send to every channel that is set up: Telegram, Discord, and ntfy if enabled.
     silent: Telegram delivers without sound (used for the every-minute status).
     channel: "alerts" (product news, the main chat) or "status" (the monitor's own health and checks)."""
@@ -717,13 +742,15 @@ def notify(title, message, priority=3, click=None, tg_html=None, silent=False, c
     if tg and tg.get("chat_id"):
         chat = (status_chat() or tg["chat_id"]) if channel == "status" else tg["chat_id"]
         text = f"<b>{html.escape(title)}</b>\n" + (tg_html or html.escape(message))
+        if cart:
+            text += f'\n\n<a href="{html.escape(cart)}">ADD TO CART (1 tap)</a>'
         if click:
-            text += f'\n\n<a href="{html.escape(click)}">Open product</a>'
+            text += ("\n" if cart else "\n\n") + f'<a href="{html.escape(click)}">Open product</a>'
         sends.append(("telegram", f"https://api.telegram.org/bot{tg['token']}/sendMessage",
                       {"chat_id": chat, "text": text, "parse_mode": "HTML",
                        "disable_web_page_preview": bool(tg_html), "disable_notification": silent}))
     if sec.get("discord_webhook"):
-        content = f"**{title}**\n{message}" + (f"\n{click}" if click else "")
+        content = f"**{title}**\n{message}" + (f"\nAdd to cart: {cart}" if cart else "") + (f"\n{click}" if click else "")
         sends.append(("discord", sec["discord_webhook"], {"content": content[:1990]}))
     if CONFIG.get("ntfy_enabled", True) and CONFIG.get("ntfy_topic"):
         body = {"topic": CONFIG["ntfy_topic"], "title": title, "message": message, "priority": priority}
@@ -739,7 +766,7 @@ def notify(title, message, priority=3, click=None, tg_html=None, silent=False, c
         if name == "telegram":  # kept and retried next run (see flush_outbox)
             TG_STATS["failed"] += 1
             OUTBOX.append({"title": title, "message": message, "click": click,
-                           "tg_html": tg_html, "t": time.time(), "channel": channel})
+                           "tg_html": tg_html, "t": time.time(), "channel": channel, "cart": cart})
 
 TG_STATS = {"sent": 0, "retried": 0, "failed": 0}
 
@@ -784,7 +811,8 @@ def flush_outbox(state):
                and not any(p.search(f"{m.get('title', '')} {m.get('message', '')}") for p, _ in matching.NEVER)]
     for m in pending:
         title = m["title"] if m["title"].endswith("(delayed)") else m["title"] + " (delayed)"
-        notify(title, m["message"], click=m["click"], tg_html=m["tg_html"], channel=m.get("channel", "alerts"))
+        notify(title, m["message"], click=m["click"], tg_html=m["tg_html"], channel=m.get("channel", "alerts"),
+               cart=m.get("cart"))
 
 def fmt(it):
     price = f"R{it['price']:,.2f}" if it["price"] is not None else "price n/a"
