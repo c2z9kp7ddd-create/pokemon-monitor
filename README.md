@@ -74,6 +74,12 @@ Open product -> link
 Overseas listings also show the original price and, when shipping and duty are configured, the landed
 cost broken down. No routine "still running" messages (`heartbeat_hours` 0, `status_messages` false).
 
+### Sharing alerts with friends
+The bot does not take subscriptions (typing /start to it does nothing). To share alerts, make a Telegram
+channel (or group), add @Kingpokemon_bot as an admin, post one message there, then run
+`python3 setup_deals_channel.py` and push `config.json`. Every deal alert then also goes to that channel
+(`alert_chat_ids`); friends join with the channel's invite link. Scan updates never go there.
+
 ## 4. Repeats and duplicates  **[code, tests/test_alerts.py]**
 
 * Each listing alerts once. It alerts again only when its price is at least 5% below the last alerted

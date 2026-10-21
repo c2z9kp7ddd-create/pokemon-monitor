@@ -264,3 +264,37 @@ class CartLinks(unittest.TestCase):
                                lambda req, **k: text.append(monitor.json.loads(req.data)["text"]) or io.BytesIO(b"{}")):
             monitor.notify("T", "m", click="https://shop/p", cart="https://shop/cart/1:1")
         self.assertLess(text[0].index("ADD TO CART"), text[0].index("Open product"))
+
+
+class SharedDeals(unittest.TestCase):
+    def setUp(self):
+        isolate(self)
+
+    def bodies(self, channel, cfg_ids, fail=()):
+        sent = []
+
+        def post(url, body, name):
+            sent.append(body["chat_id"])
+            return "HTTP 502" if body["chat_id"] in fail else None
+        with mock.patch.object(monitor, "_post_with_retry", post), \
+             mock.patch.dict(os.environ, {"TELEGRAM_TOKEN": "t", "TELEGRAM_CHAT_ID": "111"}), \
+             mock.patch.object(monitor, "status_chat", return_value="-222"), \
+             mock.patch.dict(monitor.CONFIG, {"alert_chat_ids": cfg_ids}):
+            monitor.OUTBOX.clear()
+            monitor.notify("deal", "x", channel=channel)
+        return sent
+
+    def test_deals_go_to_me_and_the_shared_channel(self):
+        self.assertEqual(self.bodies("alerts", ["-333"]), ["111", "-333"])
+
+    def test_scan_updates_never_go_to_the_shared_channel(self):
+        self.assertEqual(self.bodies("status", ["-333"]), ["-222"])
+
+    def test_a_failed_send_is_resent_only_where_it_failed(self):
+        self.bodies("alerts", ["-333"], fail={"-333"})
+        self.assertEqual([m["chat"] for m in monitor.OUTBOX], ["-333"])
+        state, monitor.OUTBOX[:] = {"outbox": list(monitor.OUTBOX)}, []
+        got = []
+        with mock.patch.object(monitor, "notify", lambda *a, **k: got.append(k.get("to"))):
+            monitor.flush_outbox(state)
+        self.assertEqual(got, [["-333"]])

@@ -721,10 +721,21 @@ def status_chat():
     product-alert chat). None until the group exists; status then falls back to the alert chat."""
     return os.environ.get("TELEGRAM_STATUS_CHAT_ID") or CONFIG.get("telegram_status_chat_id")
 
-def notify(title, message, priority=3, click=None, tg_html=None, silent=False, channel="alerts", cart=None):
+def alert_chats(main_chat):
+    """Deal alerts go to the private chat plus any shared deals channel/group (config alert_chat_ids,
+    added with setup_deals_channel.py) so friends can follow without the bot needing subscriptions."""
+    out = []
+    for c in [main_chat, *CONFIG.get("alert_chat_ids", []), *os.environ.get("TELEGRAM_ALERT_CHAT_IDS", "").split(",")]:
+        c = str(c).strip()
+        if c and c != "None" and c not in out:
+            out.append(c)
+    return out
+
+def notify(title, message, priority=3, click=None, tg_html=None, silent=False, channel="alerts", cart=None, to=None):
     """Send to every channel that is set up: Telegram, Discord, and ntfy if enabled.
     silent: Telegram delivers without sound (used for the every-minute status).
-    channel: "alerts" (product news, the main chat) or "status" (the monitor's own health and checks)."""
+    channel: "alerts" (product news: the main chat and any shared deals channel) or "status" (the monitor's
+    own health and checks, the status group). to: only these chat ids (used when resending a failed message)."""
     sec = json.loads(SECRETS_FILE.read_text()) if SECRETS_FILE.exists() else {}
     if os.environ.get("TELEGRAM_TOKEN"):  # cloud run: credentials come from GitHub secrets
         sec["telegram"] = {"token": os.environ["TELEGRAM_TOKEN"], "chat_id": os.environ.get("TELEGRAM_CHAT_ID")}
@@ -740,15 +751,18 @@ def notify(title, message, priority=3, click=None, tg_html=None, silent=False, c
         except Exception as e:
             print("telegram chat lookup failed:", e, file=sys.stderr)
     if tg and tg.get("chat_id"):
-        chat = (status_chat() or tg["chat_id"]) if channel == "status" else tg["chat_id"]
+        chats = [status_chat() or tg["chat_id"]] if channel == "status" else alert_chats(tg["chat_id"])
+        if to:
+            chats = [c for c in map(str, to)]
         text = f"<b>{html.escape(title)}</b>\n" + (tg_html or html.escape(message))
         if cart:
             text += f'\n\n<a href="{html.escape(cart)}">ADD TO CART (1 tap)</a>'
         if click:
             text += ("\n" if cart else "\n\n") + f'<a href="{html.escape(click)}">Open product</a>'
-        sends.append(("telegram", f"https://api.telegram.org/bot{tg['token']}/sendMessage",
-                      {"chat_id": chat, "text": text, "parse_mode": "HTML",
-                       "disable_web_page_preview": bool(tg_html), "disable_notification": silent}))
+        for chat in chats:
+            sends.append(("telegram", f"https://api.telegram.org/bot{tg['token']}/sendMessage",
+                          {"chat_id": chat, "text": text, "parse_mode": "HTML",
+                           "disable_web_page_preview": bool(tg_html), "disable_notification": silent}))
     if sec.get("discord_webhook"):
         content = f"**{title}**\n{message}" + (f"\nAdd to cart: {cart}" if cart else "") + (f"\n{click}" if click else "")
         sends.append(("discord", sec["discord_webhook"], {"content": content[:1990]}))
@@ -763,9 +777,9 @@ def notify(title, message, priority=3, click=None, tg_html=None, silent=False, c
             print(f"sent via {name}: {title}")
             continue
         print(f"notify via {name} failed:", err, file=sys.stderr)  # never let a failed push kill the run
-        if name == "telegram":  # kept and retried next run (see flush_outbox)
+        if name == "telegram":  # kept and retried next run (see flush_outbox), for this chat only
             TG_STATS["failed"] += 1
-            OUTBOX.append({"title": title, "message": message, "click": click,
+            OUTBOX.append({"title": title, "message": message, "click": click, "chat": body.get("chat_id"),
                            "tg_html": tg_html, "t": time.time(), "channel": channel, "cart": cart})
 
 TG_STATS = {"sent": 0, "retried": 0, "failed": 0}
@@ -812,7 +826,7 @@ def flush_outbox(state):
     for m in pending:
         title = m["title"] if m["title"].endswith("(delayed)") else m["title"] + " (delayed)"
         notify(title, m["message"], click=m["click"], tg_html=m["tg_html"], channel=m.get("channel", "alerts"),
-               cart=m.get("cart"))
+               cart=m.get("cart"), to=[m["chat"]] if m.get("chat") else None)
 
 def fmt(it):
     price = f"R{it['price']:,.2f}" if it["price"] is not None else "price n/a"
