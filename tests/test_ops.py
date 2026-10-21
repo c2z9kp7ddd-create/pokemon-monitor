@@ -344,11 +344,11 @@ class AmazonZA(unittest.TestCase):
         self.assertEqual(monitor.cart_link(it),
                          "https://www.amazon.co.za/gp/aws/cart/add.html?ASIN.1=B0H8SV3WJ8&Quantity.1=1")
 
-    def test_owned_by_the_server_only(self):
-        for role in ("github", "mac"):
-            with mock.patch.object(monitor, "IS_GITHUB", role == "github"), mock.patch.object(monitor, "IS_SERVER", False):
-                self.assertTrue(role == "mac" or "Amazon.co.za" not in {s["name"] for s in monitor.active_stores()})
-                if role == "mac":
-                    self.assertFalse(monitor.mine("Amazon.co.za"))
+    def test_owned_by_the_mac_only(self):
+        """2026-10-21: Amazon bot-checks the Oracle server's data-centre IP; the Mac's home IP gets full pages."""
+        with mock.patch.object(monitor, "IS_GITHUB", True):
+            self.assertNotIn("Amazon.co.za", {s["name"] for s in monitor.active_stores()})
         with mock.patch.object(monitor, "IS_GITHUB", False), mock.patch.object(monitor, "IS_SERVER", True):
+            self.assertFalse(monitor.mine("Amazon.co.za"))
+        with mock.patch.object(monitor, "IS_GITHUB", False), mock.patch.object(monitor, "IS_SERVER", False):
             self.assertTrue(monitor.mine("Amazon.co.za"))
