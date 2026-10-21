@@ -300,6 +300,30 @@
       "type": "eden",
       "url": "https://www.edentoys.co.za",
       "category": "/shop/pok%C3%A9mon/205"
+    },
+    {
+      "name": "Amazon.co.za",
+      "type": "amazon",
+      "url": "https://www.amazon.co.za",
+      "pages": [
+        "/b?node=28003420031",
+        "/Collectible-Card-Game-Booster-Packs/b?ie=UTF8&node=28003644031",
+        "/gp/bestsellers/toys/28003644031",
+        "/gp/new-releases/toys/28003644031"
+      ],
+      "request_gap_seconds": 3,
+      "max_product_pages": 20,
+      "watch_every_seconds": 180,
+      "asins": [
+        "B0H8SV3WJ8",
+        "B0H8ST3H4D",
+        "B0H8YP57ZX",
+        "B0H8SR6K76",
+        "B0H8T1JGDG",
+        "B0H8SXPN9P",
+        "B0H7FR54KK",
+        "B0F2BDXW4J"
+      ]
     }
   ],
   "resale": {
@@ -315,6 +339,7 @@
   },
   "ntfy_enabled": false,
   "local_only_stores": [
+    "Amazon.co.za",
     "BT Games",
     "Checkers",
     "Geek Zone",
@@ -465,6 +490,7 @@
   "local_owner": "mac",
   "telegram_status_chat_id": "-5560345589",
   "server_stores": [
+    "Amazon.co.za",
     "Geek Zone"
   ]
 }

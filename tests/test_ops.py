@@ -319,3 +319,36 @@ class EdenToys(unittest.TestCase):
         self.assertEqual([(i["title"][:20], i["price"], i["in_stock"]) for i in items],
                          [("Delta Reign - Elite ", 1300.0, False), ("Pokemon TCG 30th Cel", 1299.0, True)])
         self.assertTrue(items[1]["url"].endswith("/products/pok%C3%A9mon-30th-celebration-elite-trainer-box/7900"))
+
+
+class AmazonZA(unittest.TestCase):
+    """Amazon.co.za product pages: buyable only with an add-to-cart button and no 'currently unavailable'."""
+    PAGE = ('<span id="productTitle" class="a-size-large"> Pok&eacute;mon TCG 30th Celebration - Elite Trainer Box </span>'
+            '"priceAmount":1299.00, <div id="availability"><span class="a-color-success"> In stock </span></div>'
+            "<a id='sellerProfileTriggerId' class='x'>Amazon.co.za</a>"
+            '<input id="add-to-cart-button" type="submit">')
+
+    def test_in_stock_product(self):
+        with mock.patch.object(monitor, "amazon_get", return_value=self.PAGE):
+            it = monitor.amazon_product("Amazon.co.za", "B0H8SV3WJ8")
+        self.assertEqual((it["price"], it["in_stock"], it["seller"]), (1299.0, True, "Amazon.co.za"))
+        self.assertEqual(it["url"], "https://www.amazon.co.za/dp/B0H8SV3WJ8")
+
+    def test_unavailable_product(self):
+        page = self.PAGE.replace("In stock", "Currently unavailable.").replace('id="add-to-cart-button"', "")
+        with mock.patch.object(monitor, "amazon_get", return_value=page):
+            self.assertFalse(monitor.amazon_product("Amazon.co.za", "B0H8SV3WJ8")["in_stock"])
+
+    def test_cart_link_is_amazons_add_to_cart_form(self):
+        it = {"store": "Amazon.co.za", "key": "Amazon.co.za|B0H8SV3WJ8", "url": "https://www.amazon.co.za/dp/B0H8SV3WJ8"}
+        self.assertEqual(monitor.cart_link(it),
+                         "https://www.amazon.co.za/gp/aws/cart/add.html?ASIN.1=B0H8SV3WJ8&Quantity.1=1")
+
+    def test_owned_by_the_server_only(self):
+        for role in ("github", "mac"):
+            with mock.patch.object(monitor, "IS_GITHUB", role == "github"), mock.patch.object(monitor, "IS_SERVER", False):
+                self.assertTrue(role == "mac" or "Amazon.co.za" not in {s["name"] for s in monitor.active_stores()})
+                if role == "mac":
+                    self.assertFalse(monitor.mine("Amazon.co.za"))
+        with mock.patch.object(monitor, "IS_GITHUB", False), mock.patch.object(monitor, "IS_SERVER", True):
+            self.assertTrue(monitor.mine("Amazon.co.za"))

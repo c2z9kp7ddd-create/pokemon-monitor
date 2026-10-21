@@ -278,6 +278,10 @@ def _verify(kind, st, pid, url, it):
             return GONE, None, "product no longer listed"
         price = items[0]["price_range"]["minimum_price"]["final_price"]["value"]
         return (IN_STOCK if items[0]["stock_status"] == "IN_STOCK" else OUT_OF_STOCK), price, "product data"
+    if kind == "amazon":
+        p = amazon_product(it["store"], pid, st["url"].rstrip("/"))
+        sold = f", sold by {p['seller']}" if p.get("seller") else ""
+        return (IN_STOCK if p["in_stock"] else OUT_OF_STOCK), p["price"], "product page" + sold
     if kind == "eden":  # product page: "<n> In Stock" for the main item
         h = get_html(url)
         qty = re.search(r'lbl_QTYInStock">\s*(-?\d+)\s*In Stock', h)
@@ -317,6 +321,8 @@ def cart_link(it):
             if v:
                 u = urllib.parse.urlsplit(it["url"])
                 return f"{u.scheme}://{u.netloc}/cart/{int(v)}:1"
+        elif kind == "amazon" and re.fullmatch(r"B[0-9A-Z]{9}", pid):  # Amazon's own add-to-cart link format
+            return f"{st['url'].rstrip('/')}/gp/aws/cart/add.html?ASIN.1={pid}&Quantity.1=1"
         elif kind == "woo" and it.get("_woo_type", "simple") == "simple" and pid.isdigit():
             return f"{st['url'].rstrip('/')}/?add-to-cart={pid}&quantity=1"
     except Exception as e:
@@ -739,8 +745,87 @@ def scan_eden(store, base):
         raise ValueError("Eden Toys category page has no product cards (layout changed or blocked)")
     return out
 
+# Amazon.co.za (Gideon 2026-10-21). Its search page answers scripts with a bot check, which is not
+# worked around. Its category / best-seller / new-release pages and product pages load normally and
+# robots.txt does not disallow them, so: discover products on those listing pages, then read each
+# wanted product's own page (price, availability, seller), politely spaced. No 1-minute or 5-second checks.
+AMAZON_ASIN_TITLE = re.compile(r'title="([^"]{6,200})"[^>]*?href="[^"]*?/dp/(B[0-9A-Z]{9})'
+                               r'|href="[^"]*?/dp/(B[0-9A-Z]{9})[^"]*"[^>]*>\s*(?:<[^>]+>\s*)*?<img[^>]+alt="([^"]{6,200})"')
+AMAZON_GAP = [0.0]
+
+def amazon_get(url):
+    gap = (STORE_BY_NAME.get("Amazon.co.za") or {}).get("request_gap_seconds", 3)
+    wait = AMAZON_GAP[0] + gap - time.time()
+    if wait > 0:
+        time.sleep(wait)
+    AMAZON_GAP[0] = time.time()
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html",
+                                               "Accept-Language": "en-ZA,en;q=0.9"})
+    with urllib.request.urlopen(req, timeout=25, context=SSL_CTX) as r:
+        if r.status == 202:  # Amazon's bot check: treat as a failed request, never work around it
+            raise ValueError("Amazon answered with its bot check (202)")
+        return r.read().decode("utf-8", "replace")
+
+def amazon_product(store, asin, base="https://www.amazon.co.za"):
+    """One product page -> item, plus the seller. Buyable only with an add-to-cart button and no
+    'currently unavailable' notice."""
+    url = f"{base}/dp/{asin}"
+    h = amazon_get(url)
+    t = re.search(r'id="productTitle"[^>]*>\s*([^<]+)', h)
+    if not t:
+        raise ValueError("Amazon product page without a title (layout changed or blocked)")
+    price = re.search(r'"priceAmount":([\d.]+)', h)
+    avail = re.search(r'id="availability"[^>]*>(.*?)</div>', h, re.S)
+    avail_txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", avail.group(1))).strip()[:80] if avail else ""
+    seller = (re.search(r'id=["\']sellerProfileTriggerId["\'][^>]*>\s*([^<]{2,60})', h)
+              or re.search(r"Sold by:?\s*(?:<[^>]+>\s*)*([^<]{2,60})", h))
+    buyable = 'id="add-to-cart-button"' in h and not re.search(r"currently unavailable|out of stock", avail_txt, re.I)
+    it = item(store, asin, html.unescape(t.group(1)).strip(), url, float(price.group(1)) if price else None, buyable)
+    it["seller"] = seller.group(1).strip() if seller else ""
+    return it
+
+AMAZON_SEEN = HERE / ".amazon_asins.json"  # wanted products found on earlier listing pages (they rotate)
+
+def scan_amazon(store, base):
+    st = STORE_BY_NAME.get(store) or {}
+    base = base.rstrip("/")
+    found, pages_ok = {}, 0
+    for path in st.get("pages", []):
+        check_deadline()
+        try:
+            h = amazon_get(base + path)
+        except Exception as e:
+            print(f"amazon page {path} failed: {e}", file=sys.stderr)
+            continue
+        pages_ok += 1
+        for t1, a1, a2, t2 in AMAZON_ASIN_TITLE.findall(h):
+            asin, title = (a1, t1) if a1 else (a2, t2)
+            found.setdefault(asin, html.unescape(title))
+    try:
+        seen = json.loads(AMAZON_SEEN.read_text())
+    except Exception:
+        seen = {}
+    seen.update({a: t for a, t in found.items() if is_tcg(t) and anniversary(t)})
+    try:
+        AMAZON_SEEN.write_text(json.dumps(seen))
+    except Exception:
+        pass
+    # every wanted product ever seen, plus the configured ones, gets its own product-page read
+    wanted = list(dict.fromkeys(list(st.get("asins", [])) + list(seen)))[:st.get("max_product_pages", 20)]
+    out = []
+    for asin in wanted:
+        check_deadline()
+        try:
+            out.append(amazon_product(store, asin, base))
+        except Exception as e:
+            print(f"amazon product {asin} failed: {e}", file=sys.stderr)
+    if not out and not pages_ok:
+        raise ValueError("Amazon: no listing page and no product page could be read")
+    return out
+
 SCANNERS = {"shopify": scan_shopify, "woo": scan_woo, "checkers": scan_checkers,
-            "takealot": scan_takealot, "magento": scan_magento, "mithril": scan_mithril, "eden": scan_eden}
+            "takealot": scan_takealot, "magento": scan_magento, "mithril": scan_mithril, "eden": scan_eden,
+            "amazon": scan_amazon}
 
 # ---------------------------------------------------------------- notify
 
@@ -920,6 +1005,8 @@ def known_stores(state):
 def quick_fetch(st):
     """Cheap 'what changed' request per store: newest listings only."""
     name, base, kind = st["name"], st["url"], st["type"]
+    if kind == "amazon":
+        return []  # full scans only (heavy pages); sold-out wanted products are rechecked by the watch
     if kind == "shopify":
         # a collection URL is already narrowed to Pokemon, so read all of it (it isn't sorted newest first)
         prods = get_json(f"{base}/products.json?limit={250 if '/collections/' in base else 50}", tries=1).get("products", [])
@@ -1053,7 +1140,8 @@ def watch_loop(state, until):
         # aren't polled as well; ~325 page reads a minute from GitHub's shared IPs got throttled
         due = [(k, w) for k, w in watch.items() if w["store"] in names
                and not (IS_GITHUB and STORE_BY_NAME.get(w["store"], {}).get("type") == "shopify")
-               and max(cool.get(w["store"], 0), cool.get(w["store"] + "|watch", 0)) <= time.time()]
+               and max(cool.get(w["store"], 0), cool.get(w["store"] + "|watch", 0)) <= time.time()
+               and time.time() - w.get("polled", 0) >= STORE_BY_NAME.get(w["store"], {}).get("watch_every_seconds", 0)]
         due.sort(key=lambda kw: kw[1].get("polled", 0))
         for k, w in due:
             w["pid"] = k.split("|", 1)[1]
