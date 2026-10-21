@@ -313,7 +313,7 @@
       ],
       "request_gap_seconds": 8,
       "max_product_pages": 20,
-      "watch_every_seconds": 180,
+      "watch_every_seconds": 600,
       "asins": [
         "B0H8SV3WJ8",
         "B0H8ST3H4D",
@@ -323,7 +323,8 @@
         "B0H8SXPN9P",
         "B0H7FR54KK",
         "B0F2BDXW4J"
-      ]
+      ],
+      "scan_every_minutes": 15
     }
   ],
   "resale": {

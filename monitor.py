@@ -1670,7 +1670,12 @@ def main():
         elif (IS_GITHUB and st["type"] == "shopify"
               and time.time() - last_ok.get(n, 0) < CONFIG["shopify_rescan_minutes"] * 60):
             skipped.append(n)  # full Shopify catalogues are heavy; rescan each one every N minutes
+        elif st.get("scan_every_minutes") and \
+                time.time() - state.setdefault("last_scan_try", {}).get(n, 0) < st["scan_every_minutes"] * 60:
+            skipped.append(n)  # shops that bot-check bursts (Amazon): full scan at most every N minutes, ok or not
         else:
+            if st.get("scan_every_minutes"):
+                state["last_scan_try"][n] = time.time()
             todo.append(st)
     if IS_GITHUB:
         # Shopify limits each IP across all its shops: a few shops per run, least recently scanned first,
