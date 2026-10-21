@@ -278,6 +278,14 @@ def _verify(kind, st, pid, url, it):
             return GONE, None, "product no longer listed"
         price = items[0]["price_range"]["minimum_price"]["final_price"]["value"]
         return (IN_STOCK if items[0]["stock_status"] == "IN_STOCK" else OUT_OF_STOCK), price, "product data"
+    if kind == "eden":  # product page: "<n> In Stock" for the main item
+        h = get_html(url)
+        qty = re.search(r'lbl_QTYInStock">\s*(-?\d+)\s*In Stock', h)
+        pr = re.search(r'lbl_OptionPrice"[^>]*>\s*R\s?([\d,.]+)', h)
+        price = float(pr.group(1).replace(",", "")) if pr else it.get("price")
+        if not qty:
+            return UNKNOWN, None, "product page: no stock count"
+        return (IN_STOCK if int(qty.group(1)) > 0 else OUT_OF_STOCK), price, f"product page: {qty.group(1)} in stock"
     if kind == "mithril":
         h = get_html(url)
         if BLOCK_PAGE.search(h):
@@ -709,8 +717,30 @@ def scan_mithril(store, base):
                 out.append(item(store, f"pre-{pid}", name, f"{pre}/sets/{s}", price, is_open))
     return out
 
+# Eden Toys (George; Gideon 2026-10-21): an ASP.NET shop with no product API. Its Pokemon category page
+# (newest first) lists each product as a card: link /products/<slug>/<id>, title, price, and an enabled
+# "Add to Cart" button only when it can be bought ("View Item", disabled, when sold out). Small shop:
+# read once a minute (quick scan), not in the 5-second loop.
+EDEN_CARD = re.compile(r'href="(/products/[^"]+/(\d+))".*?btn_AddCart" value="([^"]+)"([^>]*)>.*?'
+                       r'lbl_Heading">([^<]+)</h4>.*?lbl_Price" class="price">\s*R\s?([\d,.]+)', re.S)
+
+def scan_eden(store, base):
+    st = STORE_BY_NAME.get(store) or {}
+    root = base.rstrip("/")
+    h = get_html(root + st.get("category", "/shop/pok%C3%A9mon/205"))
+    out = []
+    for href, pid, button, attrs, title, price in EDEN_CARD.findall(h):
+        title = html.unescape(title).strip()
+        if is_tcg(title):
+            out.append(item(store, pid, title, root + urllib.parse.quote(html.unescape(href), safe="/%"),
+                            float(price.replace(",", "")),
+                            button.strip().lower() == "add to cart" and "disabled" not in attrs))
+    if not out and "product-cols" not in h:
+        raise ValueError("Eden Toys category page has no product cards (layout changed or blocked)")
+    return out
+
 SCANNERS = {"shopify": scan_shopify, "woo": scan_woo, "checkers": scan_checkers,
-            "takealot": scan_takealot, "magento": scan_magento, "mithril": scan_mithril}
+            "takealot": scan_takealot, "magento": scan_magento, "mithril": scan_mithril, "eden": scan_eden}
 
 # ---------------------------------------------------------------- notify
 

@@ -298,3 +298,24 @@ class SharedDeals(unittest.TestCase):
         with mock.patch.object(monitor, "notify", lambda *a, **k: got.append(k.get("to"))):
             monitor.flush_outbox(state)
         self.assertEqual(got, [["-333"]])
+
+
+class EdenToys(unittest.TestCase):
+    """Eden Toys category cards: enabled 'Add to Cart' = buyable, disabled 'View Item' = sold out."""
+    CARDS = '''
+    <a href="/products/delta-reign-elite-trainer-box/7866" class="product-link">
+      <input type="submit" name="ctl00$cph_vShop2$ctl05$btn_AddCart" value="View Item" id="cph_vShop2_ctl05_btn_AddCart" disabled="disabled" class="aspNetDisabled btn-rounded" />
+      <div class="product-info"><h4 id="cph_vShop2_ctl05_lbl_Heading">Delta Reign - Elite Trainer Box</h4>
+      <span id="cph_vShop2_ctl05_lbl_Price" class="price">R1,300.00</span></div></a>
+    <a href="/products/pok&#233;mon-30th-celebration-elite-trainer-box/7900" class="product-link">
+      <input type="submit" name="ctl00$cph_vShop2$ctl06$btn_AddCart" value="Add to Cart" id="cph_vShop2_ctl06_btn_AddCart" class="btn-rounded" />
+      <div class="product-info"><h4 id="cph_vShop2_ctl06_lbl_Heading">Pok&#233;mon TCG 30th Celebration Elite Trainer Box</h4>
+      <span id="cph_vShop2_ctl06_lbl_Price" class="price">R1,299.00</span></div></a>
+    <div class="product-cols"></div>'''
+
+    def test_cards(self):
+        with mock.patch.object(monitor, "get_html", return_value=self.CARDS):
+            items = monitor.scan_eden("Eden Toys", "https://www.edentoys.co.za")
+        self.assertEqual([(i["title"][:20], i["price"], i["in_stock"]) for i in items],
+                         [("Delta Reign - Elite ", 1300.0, False), ("Pokemon TCG 30th Cel", 1299.0, True)])
+        self.assertTrue(items[1]["url"].endswith("/products/pok%C3%A9mon-30th-celebration-elite-trainer-box/7900"))

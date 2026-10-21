@@ -294,6 +294,12 @@
       "type": "shopify",
       "url": "https://www.zatu.com/collections/pokemon",
       "currency": "GBP"
+    },
+    {
+      "name": "Eden Toys",
+      "type": "eden",
+      "url": "https://www.edentoys.co.za",
+      "category": "/shop/pok%C3%A9mon/205"
     }
   ],
   "resale": {
