@@ -28,7 +28,10 @@ def isolate(test):
     patches = [mock.patch.object(monitor, "get_json", no_network), mock.patch.object(monitor, "get_html", no_network),
                mock.patch.object(monitor, "save_state", lambda s: None),
                mock.patch.object(monitor.urllib.request, "urlopen", no_network),
-               mock.patch.object(monitor, "mine", lambda store: True)]  # act as the copy that owns every shop
+               mock.patch.object(monitor, "mine", lambda store: True),  # act as the copy that owns every shop
+               # the real config may list a shared deals channel; tests that need one set it themselves
+               mock.patch.dict(monitor.CONFIG, {"alert_chat_ids": []}),
+               mock.patch.dict(monitor.os.environ, {"TELEGRAM_ALERT_CHAT_IDS": ""})]
     for p in patches:
         p.start()
         test.addCleanup(p.stop)
