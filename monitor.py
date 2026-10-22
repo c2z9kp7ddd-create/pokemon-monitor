@@ -1203,11 +1203,20 @@ def watch_loop(state, until):
 CHECKERS_TURN = [-1]
 AMAZON_TURN = [-1]
 
+FAST_TERM = {}  # store -> index of the search term used on its last fast check
+
+def next_fast_term(store):
+    """Each fast check searches the next wanted term in turn ("30th", "delta reign", "elite trainer",
+    "booster box"): same request rate, but every wanted product is covered, not only 30th listings."""
+    terms = CONFIG["fast_30th"].get("queries") or [CONFIG["fast_30th"].get("query", "30th")]
+    FAST_TERM[store] = (FAST_TERM.get(store, -1) + 1) % len(terms)
+    return terms[FAST_TERM[store]]
+
 def fast_fetch(st):
-    """The shop's 30th listings, available ones first: [item]."""
+    """The shop's wanted listings for this beat's search term, available ones first: [item]."""
     name, kind = st["name"], st["type"]
     base = st["url"].split("/collections/")[0]
-    q = CONFIG["fast_30th"].get("query", "30th")
+    q = next_fast_term(name)
     out = []
     if kind == "shopify" and st.get("fast_collection"):
         # shops whose search is flooded by singles, tokens or books: read a small 30th / sealed collection instead
@@ -1256,7 +1265,7 @@ def fast_fetch(st):
             bb = pv.get("buybox_summary") or {}
             out.append(item(name, core["id"], core["title"], f"https://www.takealot.com/{core['slug']}/PLID{core['id']}",
                             (bb.get("prices") or [None])[0], bb.get("is_add_to_cart_available")))
-    return [i for i in localize(name, out) if anniversary(i["title"]) == "30TH ANNIVERSARY" and is_tcg(i["title"])]
+    return [i for i in localize(name, out) if anniversary(i["title"]) and is_tcg(i["title"])]
 
 def fast_handle(state, st, found, known):
     """Record stock; a 30th listing that just became buyable goes through the alert path (which re-checks it

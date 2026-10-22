@@ -325,7 +325,7 @@
         "B0F2BDXW4J"
       ],
       "scan_every_minutes": 15,
-      "rotation_seconds": 15
+      "rotation_seconds": 20
     }
   ],
   "resale": {
@@ -372,7 +372,13 @@
       "Rocket Grunt TCG",
       "Mithril Vault"
     ],
-    "cloud_collection_seconds": 30
+    "cloud_collection_seconds": 30,
+    "queries": [
+      "30th",
+      "delta reign",
+      "elite trainer",
+      "booster box"
+    ]
   },
   "full_scan_seconds": 300,
   "probe_local_only": false,

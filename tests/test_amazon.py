@@ -96,3 +96,11 @@ class PartialScan(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TermRotation(unittest.TestCase):
+    def test_each_fast_check_searches_the_next_wanted_term(self):
+        monitor.FAST_TERM.clear()
+        terms = [monitor.next_fast_term("Shop") for _ in range(5)]
+        self.assertEqual(terms, ["30th", "delta reign", "elite trainer", "booster box", "30th"])
+        self.assertEqual(monitor.next_fast_term("Other shop"), "30th")   # each shop has its own turn

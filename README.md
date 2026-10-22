@@ -106,8 +106,10 @@ channel (or group), add @Kingpokemon_bot as an admin, post one message there, th
 
 **Amazon.co.za** (Mac only: Amazon bot-checks data-centre IPs such as the Oracle server). Its search is
 bot-checked and is not worked around; wanted products are found on category, best-seller and
-new-release pages, then each wanted product's own page is read in rotation, one page every 15 s
-(`rotation_seconds`), so with 8 wanted products each is checked about every 2 minutes. A bot-check page
+new-release pages, then each wanted product's own page is read in rotation, one page every 20 s
+(`rotation_seconds`), so with 8 wanted products each is checked about every 2.7 minutes. Ban test on
+2026-10-22: about one page every 6 s got Amazon's bot check within a minute; 15 s ran clean but was not
+proven over hours, so 20 s keeps a margin. A bot-check page
 counts as a failed check (the rotation backs off), never as sold out. A full pass (known products first,
 then the discovery pages) runs at most every 15 min and keeps what it read if it hits the time budget.
 Not checked while the Mac is asleep or offline.
