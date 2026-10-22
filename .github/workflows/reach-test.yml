@@ -6,6 +6,9 @@ on:
       fast_shops:
         description: "comma-separated shops for the 5-second test (empty = 1-minute reach test)"
         default: ""
+      amazon:
+        description: "true = test whether Amazon.co.za serves product pages to GitHub (8 pages, 15 s apart)"
+        default: "false"
 permissions:
   contents: read
 jobs:
@@ -15,6 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: |
+          if [ "${{ inputs.amazon }}" = "true" ]; then python3 reach_amazon_test.py 8; exit 0; fi
           if [ -n "${{ inputs.fast_shops }}" ]; then python3 reach_fast_test.py "${{ inputs.fast_shops }}" 5 5; else python3 reach_test.py 6; fi
         env:
           GITHUB_ACTIONS: "true"
