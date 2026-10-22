@@ -102,7 +102,15 @@ channel (or group), add @Kingpokemon_bot as an admin, post one message there, th
 | Checked by the cloud (GitHub) | 33 | all except the 4 below and Rocket Grunt |
 | Checked only by the Mac, when it is on | 4 | Geek Zone, Marvellous Hobbies, BT Games, Checkers (they return 403 to GitHub) |
 | Configured but cannot be checked | 1 | Rocket Grunt TCG (403 to every automated request) |
-| Not configured: block automated access | - | Amazon.co.za, Game, Makro, Pwned Games, Pokestop, Luckshack (bot checks, captchas) |
+| Not configured: block automated access | - | Game, Makro, Pwned Games, Pokestop, Luckshack (bot checks, captchas) |
+
+**Amazon.co.za** (Mac only: Amazon bot-checks data-centre IPs such as the Oracle server). Its search is
+bot-checked and is not worked around; wanted products are found on category, best-seller and
+new-release pages, then each wanted product's own page is read in rotation, one page every 15 s
+(`rotation_seconds`), so with 8 wanted products each is checked about every 2 minutes. A bot-check page
+counts as a failed check (the rotation backs off), never as sold out. A full pass (known products first,
+then the discovery pages) runs at most every 15 min and keeps what it read if it hits the time budget.
+Not checked while the Mac is asleep or offline.
 
 Cloud evidence: 21 shops passed the GitHub reach test on 2026-10-17 (6/6 at 1-minute pace, 58/58 at
 5 s); on 2026-10-18, 292 of 292 cloud runs in 24 h succeeded and 30 of 30 cloud shops were scanned

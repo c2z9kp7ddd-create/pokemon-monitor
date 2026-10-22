@@ -776,51 +776,69 @@ def amazon_product(store, asin, base="https://www.amazon.co.za"):
         if re.search(r"not a robot|captcha|validateCaptcha", h, re.I):
             raise ValueError("Amazon showed its bot check (not worked around; retried next pass)")
         raise ValueError("Amazon product page without a title (layout changed)")
-    price = re.search(r'"priceAmount":([\d.]+)', h)
+    # the main item's price; "priceAmount" can also belong to a carousel product further down the page
+    price = (re.search(r'id="twister-plus-price-data-price" value="([\d.]+)"', h)
+             or re.search(r'"priceAmount":([\d.]+)', h))
     avail = re.search(r'id="availability"[^>]*>(.*?)</div>', h, re.S)
     avail_txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", avail.group(1))).strip()[:80] if avail else ""
     seller = (re.search(r'id=["\']sellerProfileTriggerId["\'][^>]*>\s*([^<]{2,60})', h)
               or re.search(r"Sold by:?\s*(?:<[^>]+>\s*)*([^<]{2,60})", h))
-    buyable = 'id="add-to-cart-button"' in h and not re.search(r"currently unavailable|out of stock", avail_txt, re.I)
+    button = 'id="add-to-cart-button"' in h or 'id="buy-now-button"' in h  # pre-orders may show only "Buy now"
+    buyable = button and not re.search(r"currently unavailable|out of stock", avail_txt, re.I)
     it = item(store, asin, html.unescape(t.group(1)).strip(), url, float(price.group(1)) if price else None, buyable)
     it["seller"] = seller.group(1).strip() if seller else ""
     return it
 
 AMAZON_SEEN = HERE / ".amazon_asins.json"  # wanted products found on earlier listing pages (they rotate)
 
-def scan_amazon(store, base):
-    st = STORE_BY_NAME.get(store) or {}
-    base = base.rstrip("/")
-    found, pages_ok = {}, 0
-    for path in st.get("pages", []):
-        check_deadline()
-        try:
-            h = amazon_get(base + path)
-        except Exception as e:
-            print(f"amazon page {path} failed: {e}", file=sys.stderr)
-            continue
-        pages_ok += 1
-        for t1, a1, a2, t2 in AMAZON_ASIN_TITLE.findall(h):
-            asin, title = (a1, t1) if a1 else (a2, t2)
-            found.setdefault(asin, html.unescape(title))
+def amazon_wanted(st):
+    """Wanted ASINs: the configured ones plus every wanted product found on a listing page before."""
     try:
         seen = json.loads(AMAZON_SEEN.read_text())
     except Exception:
         seen = {}
-    seen.update({a: t for a, t in found.items() if is_tcg(t) and anniversary(t)})
+    seen = {a: t for a, t in seen.items() if anniversary(t)}  # rules change (e.g. Pitch Black): drop old finds
+    return list(dict.fromkeys(list(st.get("asins", [])) + list(seen)))[:st.get("max_product_pages", 20)]
+
+def scan_amazon(store, base):
+    """Known wanted products first (their own pages), then the listing pages that discover new ones.
+    Amazon pages are read 8 s apart, so a pass can outlast the scan budget: whatever was read by then
+    is kept (it used to be thrown away, so a pass that overran reported nothing)."""
+    st = STORE_BY_NAME.get(store) or {}
+    base = base.rstrip("/")
+    out, found, pages_ok = [], {}, 0
     try:
-        AMAZON_SEEN.write_text(json.dumps(seen))
-    except Exception:
-        pass
-    # every wanted product ever seen, plus the configured ones, gets its own product-page read
-    wanted = list(dict.fromkeys(list(st.get("asins", [])) + list(seen)))[:st.get("max_product_pages", 20)]
-    out = []
-    for asin in wanted:
-        check_deadline()
+        for asin in amazon_wanted(st):
+            check_deadline()
+            try:
+                out.append(amazon_product(store, asin, base))
+            except OutOfTime:
+                raise
+            except Exception as e:
+                print(f"amazon product {asin} failed: {e}", file=sys.stderr)
+        for path in st.get("pages", []):
+            check_deadline()
+            try:
+                h = amazon_get(base + path)
+            except Exception as e:
+                print(f"amazon page {path} failed: {e}", file=sys.stderr)
+                continue
+            pages_ok += 1
+            for t1, a1, a2, t2 in AMAZON_ASIN_TITLE.findall(h):
+                asin, title = (a1, t1) if a1 else (a2, t2)
+                found.setdefault(asin, html.unescape(title))
+    except OutOfTime:
+        print(f"amazon: scan budget reached, keeping {len(out)} product pages read", file=sys.stderr)
+    if found:
         try:
-            out.append(amazon_product(store, asin, base))
-        except Exception as e:
-            print(f"amazon product {asin} failed: {e}", file=sys.stderr)
+            seen = json.loads(AMAZON_SEEN.read_text())
+        except Exception:
+            seen = {}
+        seen.update({a: t for a, t in found.items() if is_tcg(t) and anniversary(t)})
+        try:
+            AMAZON_SEEN.write_text(json.dumps(seen))
+        except Exception:
+            pass
     if not out and not pages_ok:
         raise ValueError("Amazon: no listing page and no product page could be read")
     return out
@@ -1183,6 +1201,7 @@ def watch_loop(state, until):
 # its 30th listings with live stock, so 16 shops cost ~3 requests a second, not one per listing.
 # A hit is re-checked on the product's own page before any alert, so a stale search can't alert.
 CHECKERS_TURN = [-1]
+AMAZON_TURN = [-1]
 
 def fast_fetch(st):
     """The shop's 30th listings, available ones first: [item]."""
@@ -1220,6 +1239,15 @@ def fast_fetch(st):
             CHECKERS_TURN[0] = (CHECKERS_TURN[0] + 1) % len(pages)
             out.append(checkers_product(name, pages[CHECKERS_TURN[0]]))
         return out  # rand prices already
+    elif kind == "amazon":
+        # one wanted product page per beat, in turn: each is read every ~rotation_seconds x products
+        wanted = amazon_wanted(st)
+        if not wanted:
+            return []
+        AMAZON_TURN[0] = (AMAZON_TURN[0] + 1) % len(wanted)
+        it = amazon_product(name, wanted[AMAZON_TURN[0]], base.rstrip("/"))
+        it["page_checked"] = True  # read from its own product page: no second request to verify it
+        return [it] if anniversary(it["title"]) and is_tcg(it["title"]) else []
     elif kind == "takealot":
         d = get_json("https://api.takealot.com/rest/v-1-12-0/searches/products?" + urllib.parse.urlencode({"qsearch": f"pokemon {q}"}),
                      tries=1, timeout=10)
@@ -1237,19 +1265,24 @@ def fast_handle(state, st, found, known):
     for it in found:
         change = merge_item(state, dict(it), now, known)
         if change and it["in_stock"] and st["name"] in known:
-            consider(state, it, "fast30")
+            verified = (((PREORDER if PREORDER_WORDS.search(it["title"]) else IN_STOCK), it["price"],
+                         "product page: add to cart") if it.get("page_checked") else None)
+            consider(state, it, "fast30", verified=verified)
 
 def fast_loop(state, stop):
     """Each of my shops every fast_30th.seconds; a shop that errors slows down (doubling, up to
     max_backoff_seconds) and speeds back up as it answers; a 429 also pauses it for cooldown_minutes."""
     cfg = CONFIG["fast_30th"]
     base_wait = cfg["seconds"]
-    stores = [st for st in active_stores() if mine(st["name"]) and st["type"] in ("shopify", "woo", "takealot", "checkers")
+    stores = [st for st in active_stores() if mine(st["name"])
+              and st["type"] in ("shopify", "woo", "takealot", "checkers", "amazon")
               and st["name"] not in cfg.get("skip", [])]
     known = known_stores(state)
     # cloud: reading a whole 30th collection is a much bigger request than a search; every 5 s from
     # GitHub's shared IPs it got throttled, so those shops are read every cloud_collection_seconds there
-    floor = {st["name"]: (cfg.get("cloud_collection_seconds", 30) if IS_GITHUB and st.get("fast_collection")
+    # Amazon: one product page per beat, every rotation_seconds (it bot-checks bursts; backs off on errors)
+    floor = {st["name"]: (st.get("rotation_seconds", 15) if st["type"] == "amazon"
+                          else cfg.get("cloud_collection_seconds", 30) if IS_GITHUB and st.get("fast_collection")
                           else base_wait) for st in stores}
     wait = dict(floor)
     due = {st["name"]: time.time() + i * base_wait / max(1, len(stores)) for i, st in enumerate(stores)}  # spread out
