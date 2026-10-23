@@ -382,7 +382,7 @@
       "elite trainer",
       "booster box"
     ],
-    "workers": 10
+    "workers": 6
   },
   "full_scan_seconds": 300,
   "probe_local_only": false,
