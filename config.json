@@ -507,5 +507,6 @@
   "alert_chat_ids": [
     "-1004331055622"
   ],
-  "foreign_rescan_minutes": 30
+  "foreign_rescan_minutes": 30,
+  "shopify_light_only": true
 }

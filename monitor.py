@@ -494,7 +494,8 @@ def scan_shopify(store, base, max_pages=40):
     # Shopify throttles GitHub's shared IPs on whole-catalogue paging; targeted searches pass. Shops another
     # copy owns are only read for price comparisons, so they get the light searches too (whole catalogues of
     # 20 shops from the Mac every 5 minutes got its home IP 429s, hurting the shops only the Mac can check)
-    if IS_GITHUB or not mine(store):
+    # 2026-10-23: the Mac's home IP gets 429 on products.json too (Otaku Kulture), while search answers
+    if IS_GITHUB or not mine(store) or CONFIG.get("shopify_light_only", True):
         return scan_shopify_light(store, base)
     with SHOPIFY_GATE:
         return _scan_shopify(store, base, max_pages)
@@ -1077,8 +1078,10 @@ def quick_fetch(st):
 def quick_scan(state):
     """Every minute: newest / wanted listings at every store; changes go through the alert path."""
     cool = state.setdefault("cooldown", {})
+    # only this copy's own shops; Shopify shops get the 5-second searches instead (their catalogue address
+    # throttles GitHub and the Mac's home IP alike, and a 429 here paused the shop's fast checks too)
     stores = [st for st in active_stores() if cool.get(st["name"], 0) <= time.time()
-              and not (IS_GITHUB and st["type"] == "shopify")]  # cloud: Shopify shops get the 5-second checks instead
+              and mine(st["name"]) and st["type"] != "shopify"]
     known = known_stores(state)
     events, now = [], dt.datetime.now().isoformat(timespec="seconds")
     ex = cf.ThreadPoolExecutor(max_workers=10)

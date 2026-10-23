@@ -366,4 +366,4 @@ class ForeignShopsReadLightly(unittest.TestCase):
              mock.patch.object(monitor, "_scan_shopify", lambda st, b, p: calls.append(("full", st)) or []):
             monitor.scan_shopify("Cloud shop", "https://x")
             monitor.scan_shopify("Mine", "https://y")
-        self.assertEqual(calls, [("light", "Cloud shop"), ("full", "Mine")])
+        self.assertEqual(calls, [("light", "Cloud shop"), ("light", "Mine")])   # shopify_light_only
