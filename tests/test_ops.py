@@ -352,3 +352,18 @@ class AmazonZA(unittest.TestCase):
             self.assertFalse(monitor.mine("Amazon.co.za"))
         with mock.patch.object(monitor, "IS_GITHUB", False), mock.patch.object(monitor, "IS_SERVER", False):
             self.assertTrue(monitor.mine("Amazon.co.za"))
+
+
+class ForeignShopsReadLightly(unittest.TestCase):
+    def setUp(self):
+        isolate(self)
+
+    def test_mac_reads_cloud_owned_shopify_shops_with_light_searches(self):
+        calls = []
+        with mock.patch.object(monitor, "IS_GITHUB", False), \
+             mock.patch.object(monitor, "mine", lambda store: store == "Mine"), \
+             mock.patch.object(monitor, "scan_shopify_light", lambda st, b: calls.append(("light", st)) or []), \
+             mock.patch.object(monitor, "_scan_shopify", lambda st, b, p: calls.append(("full", st)) or []):
+            monitor.scan_shopify("Cloud shop", "https://x")
+            monitor.scan_shopify("Mine", "https://y")
+        self.assertEqual(calls, [("light", "Cloud shop"), ("full", "Mine")])

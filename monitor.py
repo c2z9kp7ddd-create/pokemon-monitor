@@ -491,7 +491,10 @@ def shopify_item(store, base, p):
     return item(store, p["id"], p["title"], f"{base}/products/{p['handle']}", pick.get("price"), bool(avail))
 
 def scan_shopify(store, base, max_pages=40):
-    if IS_GITHUB:  # Shopify throttles GitHub's shared IPs on whole-catalogue paging; targeted searches pass
+    # Shopify throttles GitHub's shared IPs on whole-catalogue paging; targeted searches pass. Shops another
+    # copy owns are only read for price comparisons, so they get the light searches too (whole catalogues of
+    # 20 shops from the Mac every 5 minutes got its home IP 429s, hurting the shops only the Mac can check)
+    if IS_GITHUB or not mine(store):
         return scan_shopify_light(store, base)
     with SHOPIFY_GATE:
         return _scan_shopify(store, base, max_pages)
@@ -1298,7 +1301,7 @@ def fast_loop(state, stop):
     cool = state.setdefault("cooldown", {})
     stats = {"ok": 0, "err": {}}
     last_log = time.time()
-    ex = cf.ThreadPoolExecutor(max_workers=6)
+    ex = cf.ThreadPoolExecutor(max_workers=CONFIG["fast_30th"].get("workers", 10))  # each shop keeps its own pace
     running = {}
     while not stop.is_set():
         t = time.time()
@@ -1712,6 +1715,9 @@ def main():
         elif (IS_GITHUB and st["type"] == "shopify"
               and time.time() - last_ok.get(n, 0) < CONFIG["shopify_rescan_minutes"] * 60):
             skipped.append(n)  # full Shopify catalogues are heavy; rescan each one every N minutes
+        elif (not IS_GITHUB and not mine(n)
+              and time.time() - last_ok.get(n, 0) < CONFIG.get("foreign_rescan_minutes", 30) * 60):
+            skipped.append(n)  # another copy owns it: only needed for price comparisons, so read it rarely
         elif st.get("scan_every_minutes") and \
                 time.time() - state.setdefault("last_scan_try", {}).get(n, 0) < st["scan_every_minutes"] * 60:
             skipped.append(n)  # shops that bot-check bursts (Amazon): full scan at most every N minutes, ok or not
