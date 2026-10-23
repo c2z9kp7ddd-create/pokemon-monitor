@@ -117,6 +117,17 @@ class Valuer:
         return m
 
 
+def us_sales_value(market, lowest):
+    """US collector value in dollars from TCGplayer: its market price (recent completed sales), made
+    conservative when live listings disagree. A cheap or junk listing (a $1 placeholder, one undercutting
+    seller) used to throw the whole value away; now the value is capped at 80% of market instead.
+    Returns (dollars, basis text)."""
+    if lowest and lowest < 0.8 * market:
+        return 0.8 * market, "TCGplayer market capped at 80% (cheaper live listings exist)"
+    if not lowest:
+        return 0.8 * market, "TCGplayer market capped at 80% (no live listings)"
+    return market, "TCGplayer market (recent sales)"
+
 def find_deals(items, valuer, cfg, want=None):
     """items: dict key -> listing. Returns every listing that both sources could value, best first.
     profitable = clears the thresholds at the listed price; deal = profitable AND buyable now.
@@ -139,22 +150,26 @@ def find_deals(items, valuer, cfg, want=None):
         if not (m and it["price"] and m.get("market")):
             continue
         market, lowest = m["market"], m.get("lowest")
-        # stale or thin market price: live listings must be near the sales price
-        if market < cfg["min_market_usd"] or not lowest or not (0.8 * market <= lowest <= 1.5 * market):
+        if market < cfg["min_market_usd"]:
             continue
-        us_zar = market * fx
+        us_usd, basis = us_sales_value(market, lowest)
+        us_zar = us_usd * fx
         others = [o["price"] for o in by_product.get(m["id"], []) if o["store"] != it["store"]]
-        if len(others) < cfg["min_other_sa_stores"]:
-            continue
-        sa_med = statistics.median(others)
-        value = min(us_zar, sa_med)  # the more pessimistic source wins
+        if len(others) >= cfg["min_other_sa_stores"]:
+            sa_med = statistics.median(others)
+            value = min(us_zar, sa_med)  # the more pessimistic source wins
+        else:  # not enough SA shops stock it: US sales alone, with a margin for the SA market
+            sa_med = None
+            value = us_zar * cfg.get("us_only_factor", 0.85)
+            basis += f", US sales only x{cfg.get('us_only_factor', 0.85)} (fewer than {cfg['min_other_sa_stores']} other SA shops)"
         net = value * (1 - cfg["sell_fee_pct"]) - cfg["sell_shipping_rand"]
         profit = net - it["price"] - cfg["buy_shipping_rand"]
         roi = profit / (it["price"] + cfg["buy_shipping_rand"])
         profitable = profit >= cfg["min_profit_rand"] and roi >= cfg["min_roi"]
         deals.append({"deal": profitable and it["in_stock"], "profitable": profitable,
                       "in_stock": it["in_stock"], "key": it["key"], "store": it["store"], "title": it["title"], "url": it["url"],
-                          "price": it["price"], "us_zar": round(us_zar), "sa_median": round(sa_med),
+                          "price": it["price"], "us_zar": round(us_zar), "sa_median": round(sa_med) if sa_med else None,
+                          "value_basis": basis,
                           "sa_n": len(others), "value": round(value), "profit": round(profit),
                           "roi": round(roi, 3), "tcg_name": m["name"], "tcg_url": m["url"],
                           "value_asof": valuer.asof.get(it["title"])})

@@ -337,7 +337,8 @@
     "min_other_sa_stores": 2,
     "min_market_usd": 10,
     "price_refresh_hours": 24,
-    "max_lookups_per_run": 120
+    "max_lookups_per_run": 120,
+    "us_only_factor": 0.85
   },
   "ntfy_enabled": false,
   "local_only_stores": [

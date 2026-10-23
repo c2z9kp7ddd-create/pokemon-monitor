@@ -1358,7 +1358,7 @@ def write_dashboard(state, deals):
         f'<tr class="{"hot" if d["deal"] else ""} {"" if d["in_stock"] else "out"}"><td><a href="{html.escape(d["url"])}">{html.escape(d["title"])}</a>'
         f'<div class="s">{html.escape(d["store"])} | <a href="{d["tcg_url"]}">TCGplayer</a></div></td>'
         f'<td class="n">R{d["price"]:,.0f}</td><td class="n">R{d["us_zar"]:,.0f}</td>'
-        f'<td class="n">R{d["sa_median"]:,.0f}</td><td class="n">R{d["profit"]:,.0f}</td></tr>'
+        f'<td class="n">{"R%s" % format(d["sa_median"], ",.0f") if d.get("sa_median") else "-"}</td><td class="n">R{d["profit"]:,.0f}</td></tr>'
         for d in deals[:60])
     items = list(state["items"].values())
     items.sort(key=lambda i: i["first_seen"], reverse=True)
@@ -1785,9 +1785,9 @@ def main():
     max_age = CONFIG.get("collector_max_age_hours", 48) * 3600
     for d in deals:  # a collector value older than collector_max_age_hours is too stale to call a bargain
         if d.get("value_asof") and time.time() - d["value_asof"] <= max_age:
-            LAST_VALUES[d["key"]] = (d["value"], f"lower of TCGplayer recent sales ~R{d['us_zar']:,.0f} and SA median "
-                                                 f"R{d['sa_median']:,.0f} across {d['sa_n']} shops, "
-                                                 f"{dt.datetime.fromtimestamp(d['value_asof']):%d %b}")
+            src = (f"lower of TCGplayer ~R{d['us_zar']:,.0f} and SA median R{d['sa_median']:,.0f} across {d['sa_n']} shops"
+                   if d.get("sa_median") else f"TCGplayer ~R{d['us_zar']:,.0f}, US sales only, x0.85")
+            LAST_VALUES[d["key"]] = (d["value"], f"{src}, {dt.datetime.fromtimestamp(d['value_asof']):%d %b}")
     if not seeding:
         # every buyable wanted listing is evaluated each full scan; the repeat rule stops repeats, so this
         # also catches listings that only now qualify (new collector value, price drop, pre-order opened)

@@ -52,7 +52,8 @@ class Targets(unittest.TestCase):
         self.assertNotIn("generations", monitor.LIGHT_TERMS)
 
     def test_non_english_never_matches(self):
-        for t in ["Pokemon Japanese 30th Celebration Booster Box (M6a)",
+        for t in ["Pokemon TCG Japan: Terastal Festival Booster Box",          # PokePlugZA spelling
+                  "Pokemon Japanese 30th Celebration Booster Box (M6a)",
                   "Pokemon Chinese | 30th Anniversary Celebration | Booster Box",
                   "Pokemon TCG Korean Delta Reign Booster Box",
                   "Pokemon 30th Celebration Simplified Chinese Gift Box",

@@ -51,11 +51,12 @@ mini tin R299 ...). These are estimates per product type, and alerts say so. `re
 a confirmed price for one specific product (pattern, rand, source); it wins over the type estimate.
 
 *Collector test*: comparable price strictly below collector value. Collector value = the lower of
-(a) TCGplayer market price, which is built from recent completed US sales, converted to rand, and
-(b) the median price of the same product at 2+ other SA shops (current listings only). It is only used
-when the TCGplayer match is exact (same set and product type, live listings within 0.8-1.5x of the
-market price) and the data is at most 48 h old (`collector_max_age_hours`). Asking prices are a weaker
-signal than sales; taking the lower of the two keeps it conservative.
+(a) TCGplayer market price (recent completed US sales) converted to rand, capped at 80% of market when
+cheaper live listings exist (a junk $1 listing or one undercutting seller no longer throws the value
+away; 2026-10-23), and (b) the median price of the same product at 2+ other SA shops (current listings).
+When fewer than 2 other SA shops stock it, the US value alone is used, x0.85, and the alert says so.
+The TCGplayer match must be exact (same set and product type) and at most 48 h old. On 2026-10-23 this
+gave a value for 313 of 443 wanted English listings (was 99).
 
 No price, no reference, stale value: no alert. The rejection reason is counted (section 7).
 

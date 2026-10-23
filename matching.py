@@ -24,7 +24,7 @@ TARGETS = [
 ]
 PRICE_TEST = {label: test for label, _, test, _ in TARGETS}
 
-NON_ENGLISH = re.compile(r"japanese|chinese|korean|thai|indonesian|simplified|traditional|"
+NON_ENGLISH = re.compile(r"japanese|\bjapan\b|chinese|korean|thai|indonesian|simplified|traditional|"
                          r"\bjp\b|\bjpn\b|\bcn\b|\bchs\b|\bcht\b|\bm6a\b|\bkr\b|\bgerman\b|\bfrench\b|"
                          r"\bitalian\b|\bspanish\b|\bportuguese\b", re.I)
 # accessories that merely mention a product ("Booster Box Protector", "ETB sleeves")
