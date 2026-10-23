@@ -1293,7 +1293,8 @@ def fast_loop(state, stop):
     # cloud: reading a whole 30th collection is a much bigger request than a search; every 5 s from
     # GitHub's shared IPs it got throttled, so those shops are read every cloud_collection_seconds there
     # Amazon: one product page per beat, every rotation_seconds (it bot-checks bursts; backs off on errors)
-    floor = {st["name"]: (st.get("rotation_seconds", 15) if st["type"] == "amazon"
+    floor = {st["name"]: (st["fast_seconds"] if st.get("fast_seconds")  # a shop that throttles 5 s (tested)
+                          else st.get("rotation_seconds", 15) if st["type"] == "amazon"
                           else cfg.get("cloud_collection_seconds", 30) if IS_GITHUB and st.get("fast_collection")
                           else base_wait) for st in stores}
     wait = dict(floor)

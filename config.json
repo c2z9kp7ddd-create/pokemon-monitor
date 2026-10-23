@@ -276,7 +276,8 @@
     {
       "name": "Otaku Kulture",
       "type": "shopify",
-      "url": "https://otakukulture.co.za"
+      "url": "https://otakukulture.co.za",
+      "fast_seconds": 20
     },
     {
       "name": "The Jokers House",
