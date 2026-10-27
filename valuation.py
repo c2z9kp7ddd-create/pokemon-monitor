@@ -14,6 +14,7 @@ import urllib.parse
 
 TCG_SEARCH = "https://mp-search-api.tcgplayer.com/v1/search/request?"
 FX_URL = "https://open.er-api.com/v6/latest/USD"
+MATCH_VERSION = 2  # bump when match() changes so cached misses are retried
 
 STOP = set("""pokemon tcg the and of a an pre order preorder trading card cards game english eng sealed new
 max per customer customers only for random one at artwork assorted random bots orders using uding will be
@@ -25,7 +26,22 @@ upc etb 2 3 6 8 10 18 36""".split())
 FOREIGN = ("japanese", "chinese", "korean", "thai", "indonesian", "simplified", "traditional", "jpn", "(jp)")
 ALIASES = [(r"\betb\b", "elite trainer box"), (r"\bupc\b", "ultra premium collection"),
            (r"ultra-premium", "ultra premium"), (r"pok[eé]mon center", "center"),
-           (r"(\d)-pack", r"\1 pack"), (r"\btins\b", "tin")]
+           (r"\btwo\b", "2"), (r"\bthree\b", "3"),
+           (r"(\d)-pack", r"\1 pack"), (r"\btins\b", "tin"),
+           # set numbers shops put before the set name ("Scarlet & Violet 10 - Destined Rivals", "SV10.5:")
+           # read as product-type numbers and blocked every match (2026-10-27)
+           (r"\b(?:scarlet\W*(?:&|and)\W*violet|sword\W*(?:&|and)\W*shield|sv|swsh|sm|me)\W*\d{1,2}(?:\.\d)?\b(?!\W*packs?\b)", " "),
+           (r"booster display", "booster box"),
+           (r"(booster box)\W*\(?36\W*(?:booster\W*)?packs?\)?", r"\1"),
+           (r"\bjourneying\b", "journey"), (r"30th anniversary", "30th celebration"),
+           (r"\bmega evolution(?=[a-rt-z])", "mega evolution "),  # "Mega EvolutionChaos Rising"
+           (r"elite trainers?(?! box)", "elite trainer box"),
+           # purchase limits are not pack counts: "(max 2 per customer)", "Limited 1 per customer"
+           (r"\b(?:max(?:imum)?|limit(?:ed)?(?: to)?)\W*\d+\W*(?:per\W*(?:customer|order|person|household))?", " "),
+           (r"\b\d+\W*per\W*(?:customer|order|person|household)\b", " "),
+           (r"\b1\W*random\W*(?:tin|pack|box|artwork)?\b", " ")]
+# TCGplayer name decorations that do not change the product
+DECOR = {"exclusive", "retail", "version", "ex"}  # 'Battle Deck (Umbreon)' is TCGplayer's '[Umbreon ex]'
 
 
 def tokens(title):
@@ -40,20 +56,51 @@ def is_foreign(title):
     return any(f in t for f in FOREIGN)
 
 
+def _variant(name):
+    """(name without its artwork bracket, artwork tokens). '30th Celebration Mini Tin [Mew]' ->
+    ('30th Celebration Mini Tin', {'mew'}). '[Set of 2]' is a different product, not an artwork."""
+    m = re.search(r"\[([^\]]+)\]", name)
+    if not m or re.search(r"\bset of\b|\d", m.group(1), re.I):
+        return name, set()
+    return re.sub(r"\s+", " ", name[:m.start()] + name[m.end():]).strip(), set(tokens(m.group(1))) - DECOR
+
+
+def _identity(toks):
+    """A name must keep at least one word that is not a product-type word; 'Mega Evolution Booster Box'
+    tokenizes to just 'booster box' and would otherwise match every booster box listing."""
+    return bool(set(toks) - KIND)
+
+
 def match(title, candidates):
     """Best TCGplayer candidate whose meaningful words all appear in the listing title
-    and whose product-type words are identical. None if nothing is safe."""
-    lt = set(tokens(title))
-    best = None
+    and whose product-type words are identical. None if nothing is safe.
+    TCGplayer lists each artwork separately ('Paradox Rift Elite Trainer Box [Iron Valiant]'); a listing that
+    names no artwork gets the cheapest artwork of that product, so the value stays conservative."""
+    lt = set(tokens(title)) - DECOR
+    best, best_len = None, -1
+    families = {}
     for c in candidates:
-        ct = set(tokens(c["name"]))
-        if not ct or not ct <= lt:
+        ct = set(tokens(c["name"])) - DECOR
+        if not ct or not _identity(ct) or (lt & KIND) != (ct & KIND):
             continue
-        if (lt & KIND) != (ct & KIND):
+        if ct <= lt:
+            if len(ct) > best_len:
+                best, best_len = c, len(ct)
             continue
-        if best is None or len(ct) > len(set(tokens(best["name"]))):
-            best = c
-    return best
+        base, art = _variant(c["name"])
+        bt = set(tokens(base)) - DECOR
+        if art and bt and bt <= lt and not (art & lt) and c.get("market"):
+            families.setdefault(frozenset(bt), []).append(c)
+    if best is not None:
+        return best
+    # artwork families: only when the listing has nothing beyond the family's own words (no artwork it
+    # names that TCGplayer's results did not show)
+    for bt, group in sorted(families.items(), key=lambda kv: -len(kv[0])):
+        if lt - bt:
+            continue
+        low = min(group, key=lambda c: c["market"])
+        return dict(low, name=f"{_variant(low['name'])[0]} (any artwork: cheapest, {low['name']})")
+    return None
 
 
 class Valuer:
@@ -97,6 +144,8 @@ class Valuer:
             return None
         q = " ".join(tokens(title))
         c = self.cache.get(q)
+        if c and not c["m"] and c.get("v") != MATCH_VERSION:
+            c = None  # a 'no match' from an older matcher: look again
         if c and time.time() - c["t"] < self.cfg["price_refresh_hours"] * 3600:
             self.asof[title] = c["t"]
             return c["m"]
@@ -107,12 +156,18 @@ class Valuer:
         self.lookups += 1
         try:
             m = match(title, self.search(q))
+            q2 = " ".join(w for w in q.split() if w not in DECOR)
+            if m is None and q2 != q and self.lookups < self.cfg["max_lookups_per_run"]:
+                # TCGplayer's search drops '30th Celebration Battle Deck [Umbreon ex]' for '... umbreon ex'
+                self.lookups += 1
+                time.sleep(0.3)
+                m = match(title, self.search(q2))
         except Exception:
             if c:
                 self.asof[title] = c["t"]
             return c["m"] if c else None
         time.sleep(0.3)
-        self.cache[q] = {"t": time.time(), "m": m}
+        self.cache[q] = {"t": time.time(), "m": m, "v": MATCH_VERSION}
         self.asof[title] = self.cache[q]["t"]
         return m
 

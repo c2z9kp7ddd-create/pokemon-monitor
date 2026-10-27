@@ -56,3 +56,44 @@ class FindDeals(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def c(name, market=50.0, pid=0):
+    return {"name": name, "market": market, "lowest": market, "id": pid, "url": "t"}
+
+
+class Matching(unittest.TestCase):
+    """Real TCGplayer names and SA shop titles, 2026-10-27."""
+    def test_set_numbers_and_box_pack_counts_do_not_block(self):
+        self.assertEqual(v.match("Pokemon TCG : Scarlet & Violet 10 - Destined Rivals Elite Trainer Box",
+                                 [c("Destined Rivals Elite Trainer Box")])["name"], "Destined Rivals Elite Trainer Box")
+        self.assertIsNotNone(v.match("Pokemon: Lost Origin Booster Box (36 packs)", [c("Lost Origin Booster Box")]))
+        self.assertIsNotNone(v.match("Pokemon TCG 30th Celebration - Elite Trainer Box - (max 2 per customer)",
+                                     [c("30th Celebration Elite Trainer Box")]))
+        self.assertIsNotNone(v.match("Pokemon 30th anniversary Elite Trainer Box", [c("30th Celebration Elite Trainer Box")]))
+
+    def test_pack_counts_still_matter(self):
+        self.assertIsNone(v.match("30th Celebration 2-Pack Blister", [c("30th Celebration 3 Pack Blister")]))
+        self.assertIsNone(v.match("Lost Origin Elite Trainer Box", [c("Lost Origin Pokemon Center Elite Trainer Box (Exclusive)")]))
+
+    def test_named_artwork_gets_that_artwork(self):
+        m = v.match("Pokemon TCG 30th Celebration - ex Tin Greninja",
+                    [c("30th Celebration ex Tin [Sylveon ex] (Retail Version)", 62.61),
+                     c("30th Celebration ex Tin [Greninja ex] (Retail Version)", 65.48),
+                     c("30th Celebration ex Tin [Greninja ex] (International Version)", 90)])
+        self.assertEqual(m["market"], 65.48)
+
+    def test_no_artwork_named_takes_the_cheapest_artwork(self):
+        m = v.match("Pokemon: 30th Celebration Mini Tin",
+                    [c("30th Celebration Mini Tin [Mew]", 28.61), c("30th Celebration Mini Tin [Moltres]", 22.63),
+                     c("30th Celebration Mini Tin Display", 234.15), c("30th Celebration Mini Tin [Set of 2]", 40)])
+        self.assertEqual(m["market"], 22.63)
+        self.assertIn("any artwork", m["name"])
+
+    def test_artwork_family_not_used_when_listing_names_an_unseen_artwork(self):
+        self.assertIsNone(v.match("30th Celebration Mini Tin Pikachu", [c("30th Celebration Mini Tin [Mew]")]))
+
+    def test_a_name_with_no_set_words_never_matches(self):
+        # 'Mega Evolution Booster Box' is just 'booster box' after stop words: it used to fit any booster box
+        self.assertIsNone(v.match("Pokemon TCG: Lost Origin Booster Box", [c("Mega Evolution Booster Box")]))
+        self.assertIsNone(v.match("Pokemon: Mega Evolution Booster Box", [c("Mega Evolution Booster Box")]))

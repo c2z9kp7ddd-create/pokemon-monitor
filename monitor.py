@@ -341,6 +341,15 @@ def reject(state, code, it, source, detail=""):
         print(f"reject [{code}] {source}: {it['store']}: {it['title'][:70]} R{it.get('price')} {detail}".rstrip())
     return False
 
+def official_prices(state):
+    """[(title, rand, store)]: what the official SA store (config official_retail_stores, Nintendo Store SA)
+    charges for each TCG product it has listed in the last 60 days. pricing.decide uses it as the exact
+    retail price of that product, ahead of the per-product-type estimates."""
+    names = set(CONFIG.get("official_retail_stores", []))
+    cutoff = (dt.datetime.now() - dt.timedelta(days=60)).isoformat(timespec="seconds")
+    return [(norm(i["title"]), i["price"], i["store"]) for i in state.get("items", {}).values()
+            if i.get("store") in names and i.get("price") and i.get("last_seen", "") >= cutoff and is_tcg(i["title"])]
+
 DIGEST = []  # set to a list to collect alerts instead of sending them one by one (first sweep after deploy)
 
 def consider(state, it, source, verified=None):
@@ -356,7 +365,7 @@ def consider(state, it, source, verified=None):
     value, vsrc = LAST_VALUES.get(it["key"], (None, None))
     fp = matching.fingerprint(it["store"], it["title"])
     if it.get("price"):  # cheap pre-checks before spending a request on the product page
-        pre = pricing.decide(lab, norm(it["title"]).lower(), it["price"], store, CONFIG, fx_for(store), value, vsrc)
+        pre = pricing.decide(lab, norm(it["title"]).lower(), it["price"], store, CONFIG, fx_for(store), value, vsrc, official_prices(state))
         if not pre.qualifies:
             return reject(state, pre.code, it, source, pre.reason)
         if not would_alert(state, it["key"], fp, pre.comparable):
@@ -366,7 +375,7 @@ def consider(state, it, source, verified=None):
     if status not in BUYABLE:
         return reject(state, "verify_failed" if status == UNKNOWN else "unavailable", it, source, f"({detail})")
     price = price if price is not None else it.get("price")
-    dec = pricing.decide(lab, norm(it["title"]).lower(), price, store, CONFIG, fx_for(store), value, vsrc)
+    dec = pricing.decide(lab, norm(it["title"]).lower(), price, store, CONFIG, fx_for(store), value, vsrc, official_prices(state))
     if not dec.qualifies:
         return reject(state, dec.code, it, source, dec.reason + " (on the product page)")
     if not first_alert(state, it["key"], dec.comparable, fp):
@@ -420,7 +429,7 @@ def alert_message(it, lab, dec, status, detail):
                      f"+ duty R{parts.get('duty', 0):,.0f} + import VAT R{parts.get('vat', 0):,.0f} (estimate)")
     if dec.retail:
         rel = "below" if dec.saving_vs_retail >= 0 else "above"
-        lines.append(f"Retail: SA shelf ~R{dec.retail:,.0f} ({'exact product' if dec.retail_kind == 'exact' else 'typical for this product type, estimate'})"
+        lines.append(f"Retail: SA shelf ~R{dec.retail:,.0f} ({dec.retail_source if dec.retail_kind == 'exact' else 'typical for this product type, estimate'})"
                      f", {_pct(dec.saving_vs_retail)} {rel}")
     if dec.collector:
         lines.append(f"Collector value ~R{dec.collector:,.0f} ({dec.collector_source}), {_pct(dec.saving_vs_collector)} below"

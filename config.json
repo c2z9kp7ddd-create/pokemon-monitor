@@ -499,6 +499,7 @@
     "_note": "Overseas landed cost = item + intl_shipping (per store, in its currency, from checkout) + duty + 15% import VAT on (item x 1.10 + duty). Leave a value null until confirmed: listings then cannot pass the price test."
   },
   "retail_exact": [],
+  "official_retail_stores": ["Nintendo Store SA"],
   "collector_max_age_hours": 48,
   "local_owner": "mac",
   "telegram_status_chat_id": "-5560345589",

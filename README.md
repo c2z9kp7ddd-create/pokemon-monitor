@@ -48,7 +48,11 @@ A listing alerts only when ALL of these hold **[code: matching.py, pricing.py, m
 (`retail_tolerance`). Shelf prices come from `retail_refs_rand`: one typical price per product type
 (ETB R1,300 so the limit is R1,495, Pokemon Center ETB R2,000, booster box R3,999, booster bundle R699,
 mini tin R299 ...). These are estimates per product type, and alerts say so. `retail_exact` can hold
-a confirmed price for one specific product (pattern, rand, source); it wins over the type estimate.
+a confirmed price for one specific product (pattern, rand, source); it wins over everything.
+Next comes the *official price*: what Nintendo Store SA (`official_retail_stores`) charges for that exact
+product, learned from its listings seen in the last 60 days (30th Mini Tin R299, Tech Sticker Collection
+R499, 30th ETB R1,299, Chaos Rising ETB R1,299 ...). It uses the same matching rule as the collector test,
+so a Mini Tin Display never gets the single tin's price. Alerts name the source. Only then the type estimate.
 
 *Collector test*: comparable price strictly below collector value. Collector value = the lower of
 (a) TCGplayer market price (recent completed US sales) converted to rand, capped at 80% of market when
@@ -56,7 +60,13 @@ cheaper live listings exist (a junk $1 listing or one undercutting seller no lon
 away; 2026-10-23), and (b) the median price of the same product at 2+ other SA shops (current listings).
 When fewer than 2 other SA shops stock it, the US value alone is used, x0.85, and the alert says so.
 The TCGplayer match must be exact (same set and product type) and at most 48 h old. On 2026-10-23 this
-gave a value for 313 of 443 wanted English listings (was 99).
+gave a value for 313 of 443 wanted English listings (was 99). On 2026-10-27, 500 of 603 (was 360): set
+numbers ("Scarlet & Violet 10 -"), "(36 packs)", "(max 2 per customer)", "30th Anniversary", "Elite Trainer"
+without "Box" and TCGplayer's "(Exclusive)"/"(Retail Version)" no longer block a match. TCGplayer lists each
+artwork separately ("Mini Tin [Mew]"): a listing that names its artwork gets that one, a listing that names
+none gets the cheapest artwork. A TCGplayer name with no set words left ("Mega Evolution Booster Box")
+never matches, as it used to fit any booster box. Combo listings ("ETB + booster box") get the value of one
+item at most, so they can only be undervalued.
 
 No price, no reference, stale value: no alert. The rejection reason is counted (section 7).
 
@@ -225,7 +235,7 @@ Adding a target: one row in `matching.TARGETS` plus genuine and near-miss titles
 
 ## 12. Known limitations
 
-* Retail references are per product type, not per product, unless added to `retail_exact`.
+* Retail references are per product type unless Nintendo Store SA lists the product or it is in `retail_exact`.
 * UK shops cannot alert until their shipping and the import duty are confirmed and configured.
 * Collector value relies on TCGplayer (US sales) and SA asking prices; no SA completed-sales source.
 * Mithril Vault pages have no machine-readable stock flag: their text is read ("Add to cart" / "Sold

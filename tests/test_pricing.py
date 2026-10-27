@@ -111,3 +111,29 @@ class Landed(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OfficialRetail(unittest.TestCase):
+    """Nintendo Store SA's own price for the exact product, learned from its listings (2026-10-27)."""
+    OFFICIAL = [("Pokemon TCG 30th Celebration - Mini Tin", 299.0, "Nintendo Store SA"),
+                ("Pokemon TCG 30th Celebration - Elite Trainer Box", 1299.0, "Nintendo Store SA")]
+
+    def test_official_price_is_the_exact_reference(self):
+        rand, kind, source = pricing.retail_reference("pokemon tcg: 30th celebration mini tin [mew]", {}, self.OFFICIAL)
+        self.assertEqual((rand, kind), (299.0, "exact"))
+        self.assertIn("Nintendo Store SA", source)
+
+    def test_different_product_type_does_not_use_it(self):
+        cfg = {"retail_refs_rand": [["mini tin", 300]]}
+        self.assertEqual(pricing.retail_reference("30th celebration mini tin display", cfg, self.OFFICIAL)[1], "type")
+        self.assertIsNone(pricing.retail_reference("30th celebration booster bundle", {}, self.OFFICIAL)[0])
+
+    def test_config_exact_still_wins(self):
+        cfg = {"retail_exact": [["30th celebration elite trainer", 1199, "manual"]]}
+        self.assertEqual(pricing.retail_reference("30th celebration elite trainer box", cfg, self.OFFICIAL)[0], 1199)
+
+    def test_decide_passes_at_official_retail(self):
+        d = pricing.decide("30TH ANNIVERSARY", "30th celebration mini tin", 320, {}, {"retail_tolerance": 0.15},
+                           official=self.OFFICIAL)
+        self.assertTrue(d.qualifies)
+        self.assertEqual(d.retail_kind, "exact")

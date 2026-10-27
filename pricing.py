@@ -19,6 +19,8 @@ the listing cannot pass (it is still rejected outright when even the lower bound
 from dataclasses import dataclass, field
 import re
 
+import valuation
+
 SA_IMPORT_VAT = 0.15      # SARS import VAT rate
 SA_VAT_UPLIFT = 0.10      # SARS adds 10% to the customs value before VAT (freight/insurance proxy)
 
@@ -58,13 +60,33 @@ def landed_cost(price_zar, store, intl_cfg, fx):
                   "estimated landed cost (shipping and duty from config)")
 
 
-def retail_reference(title, cfg):
+def official_reference(title, official):
+    """(rand, source) from the official SA store's own listing of this exact product, or (None, None).
+    official: [(title, rand, store)] of listings at the stores in config official_retail_stores.
+    Same safety rule as the collector match: every word of the official name is in the listing title and
+    the product-type words are identical; the most specific official name wins."""
+    lt = set(valuation.tokens(title)) - valuation.DECOR
+    best = None
+    for name, rand, store in official or []:
+        ot = set(valuation.tokens(name)) - valuation.DECOR
+        if not ot or not (ot - valuation.KIND) or not ot <= lt or (lt & valuation.KIND) != (ot & valuation.KIND):
+            continue
+        if best is None or len(ot) > best[0]:
+            best = (len(ot), rand, f"official price at {store} (R{rand:,.0f}, {name})")
+    return (best[1], best[2]) if best else (None, None)
+
+
+def retail_reference(title, cfg, official=None):
     """(rand, kind, source) for the normal SA shelf price, or (None, None, None).
-    retail_exact entries name one specific product and win over the per-product-type estimates."""
+    retail_exact entries name one specific product and win; then the official SA store's own price for this
+    product (learned from its listings); then the per-product-type estimates."""
     t = title.lower()
     for pattern, rand, source in cfg.get("retail_exact", []):
         if re.search(pattern, t):
             return rand, "exact", source
+    rand, source = official_reference(title, official)
+    if rand:
+        return rand, "exact", source
     for pattern, rand in cfg.get("retail_refs_rand", []):
         if re.search(pattern, t):
             return rand, "type", "typical SA shelf price for this product type (config retail_refs_rand)"
@@ -88,9 +110,10 @@ class Decision:
     estimated: bool = True
 
 
-def decide(label, title, price_zar, store, cfg, fx=1.0, value=None, value_source=None):
+def decide(label, title, price_zar, store, cfg, fx=1.0, value=None, value_source=None, official=None):
     """label: matching.label() result (30TH ANNIVERSARY, DELTA REIGN, BOOSTER BOX, ETB).
-    value: collector value in rand from recent sales, or None when unknown/stale."""
+    value: collector value in rand from recent sales, or None when unknown/stale.
+    official: [(title, rand, store)] official SA store listings, see official_reference."""
     if price_zar is None or price_zar <= 0:
         return Decision(False, "no price shown", "no_price")
     landed = landed_cost(price_zar, store, cfg.get("international"), fx)
@@ -99,7 +122,7 @@ def decide(label, title, price_zar, store, cfg, fx=1.0, value=None, value_source
     ref, kind, source = (None, None, None)
     collector_only = label in ("BOOSTER BOX", "ETB")
     if not collector_only:
-        ref, kind, source = retail_reference(title, cfg)
+        ref, kind, source = retail_reference(title, cfg, official)
     d = Decision(False, "", "", comparable=round(comparable, 2), retail=ref, retail_kind=kind, retail_source=source,
                  collector=value, collector_source=value_source if value else None, landed=landed)
     if ref:
