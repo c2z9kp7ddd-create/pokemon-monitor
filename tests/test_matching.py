@@ -70,7 +70,7 @@ class Targets(unittest.TestCase):
         self.check("Pokemon 30th Celebration Binder", None)                   # lone binder is an accessory
         self.check("Pokemon 30th Celebration Binder Collection", "30TH ANNIVERSARY")
         self.check("Pokemon Celebrations Elite Trainer Box", "ETB")           # 25th, not 30th
-        self.check("Pokemon Celebrations Ultra Premium Collection", None)     # 25th Anniversary product
+        self.check("Pokemon Celebrations Ultra Premium Collection", "SPC/UPC")  # 25th Anniversary: an ordinary UPC, not 30th
         self.check("Pokemon 25th Anniversary Collection", None)
         self.check("Empty Elite Trainer Box", None)
 
@@ -103,3 +103,17 @@ class Targets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpcUpc(unittest.TestCase):
+    """Gideon 2026-10-27: SPCs and UPCs of any set are wanted."""
+    def test_wanted(self):
+        for t in ["Pokemon TCG: Mega Charizard ex Ultra-Premium Collection", "Pokemon: Prismatic Evolutions Super Premium Collection",
+                  "Pokemon TCG: Delta Reign Ultra Premium Collection", "Charizard UPC"]:
+            self.assertEqual(matching.label(t), "SPC/UPC", t)
+
+    def test_not_wanted(self):
+        self.assertEqual(matching.label("Pokemon 30th Celebration Ultra-Premium Collection"), "30TH ANNIVERSARY")
+        for t in ["Pitch Black Super Premium Collection", "Japanese Ultra Premium Collection", "UPC card sleeves",
+                  "Pokemon Premium Collection Lucario", "Pokemon: Delta Reign 3-pack blister"]:
+            self.assertIsNone(matching.label(t), t)

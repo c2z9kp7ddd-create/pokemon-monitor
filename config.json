@@ -381,7 +381,8 @@
       "30th",
       "delta reign",
       "elite trainer",
-      "booster box"
+      "booster box",
+      "premium collection"
     ],
     "workers": 6
   },
@@ -395,7 +396,7 @@
     ],
     [
       "ultra.?premium|\\bupc\\b",
-      4999
+      4200
     ],
     [
       "booster box|booster display|36 packs",
@@ -412,6 +413,10 @@
     [
       "figure collection",
       950
+    ],
+    [
+      "super.?premium|\\bspc\\b",
+      2500
     ],
     [
       "premium collection",
@@ -499,7 +504,9 @@
     "_note": "Overseas landed cost = item + intl_shipping (per store, in its currency, from checkout) + duty + 15% import VAT on (item x 1.10 + duty). Leave a value null until confirmed: listings then cannot pass the price test."
   },
   "retail_exact": [],
-  "official_retail_stores": ["Nintendo Store SA"],
+  "official_retail_stores": [
+    "Nintendo Store SA"
+  ],
   "collector_max_age_hours": 48,
   "local_owner": "mac",
   "telegram_status_chat_id": "-5560345589",

@@ -18,6 +18,8 @@ BOX_OR_ETB = re.compile(r"\belite trainer\b|\betb\b|\bbooster box\b|\bbooster di
 # (label, pattern, price test, also required). First match wins, so specific targets come first.
 TARGETS = [
     ("30TH ANNIVERSARY", re.compile(r"\b30\s?th\b|\b30 years\b|\b30-year", re.I), "retail_or_collector", None),
+    # Gideon 2026-10-27: SPCs/UPCs of any set, at SA retail or below collector value (a Delta Reign UPC counts)
+    ("SPC/UPC", re.compile(r"\bsuper[- ]?premium\b|\bultra[- ]?premium\b|\bupc\b|\bspc\b", re.I), "retail_or_collector", None),
     ("DELTA REIGN", re.compile(r"\bdelta reign\b", re.I), "retail_or_collector", BOX_OR_ETB),
     ("BOOSTER BOX", re.compile(r"\bbooster box\b|\bbooster display\b|\b36[- ]?packs?\b", re.I), "collector", None),
     ("ETB", re.compile(r"\belite trainer\b|\betb\b", re.I), "collector", None),

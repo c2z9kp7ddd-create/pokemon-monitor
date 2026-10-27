@@ -70,7 +70,7 @@ SINGLE_CARD = re.compile(r"\[mega evolution[^\]]*\]|\b\d{1,3}/\d{1,3}|\bbasic \w
 THIRTIETH = matching.TARGETS[0][1]  # also used to repair Mithril Vault titles
 
 def anniversary(title):
-    """Wanted-product label (matching.TARGETS: 30TH ANNIVERSARY, DELTA REIGN, BOOSTER BOX, ETB), else None."""
+    """Wanted-product label (matching.TARGETS: 30TH ANNIVERSARY, SPC/UPC, DELTA REIGN, BOOSTER BOX, ETB), else None."""
     return matching.label(title)
 
 def is_30th(title):
