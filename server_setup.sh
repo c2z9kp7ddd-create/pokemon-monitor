@@ -32,7 +32,35 @@ RestartSec=30
 [Install]
 WantedBy=multi-user.target
 UNIT
+# the watchdog for this server (and, from outside GitHub, the cloud chain), every 10 minutes
+sudo tee /etc/systemd/system/pokemon-watchdog.service >/dev/null <<UNIT
+[Unit]
+Description=SA Pokemon monitor watchdog
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=$USER
+WorkingDirectory=/home/$USER/pokemon-monitor
+Environment=MONITOR_ROLE=server
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 watchdog.py --server
+TimeoutStartSec=300
+UNIT
+sudo tee /etc/systemd/system/pokemon-watchdog.timer >/dev/null <<UNIT
+[Unit]
+Description=Run the Pokemon monitor watchdog every 10 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
 sudo systemctl daemon-reload
+sudo systemctl enable --now pokemon-watchdog.timer
 sudo systemctl enable --now pokemon-monitor
 sudo systemctl restart pokemon-monitor
 echo "installed. It alerts only after config.json says \"local_owner\": \"server\"."

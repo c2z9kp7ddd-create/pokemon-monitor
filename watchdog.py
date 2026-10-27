@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Watchdog for the Pokemon stock monitor. Runs every 10 minutes on the Mac (launchd com.pokemon-watchdog).
+"""Watchdog for the Pokemon stock monitor. Runs in the cloud, not on the Mac (Gideon, 2026-10-27):
 
-Checks both copies, fixes what it can, and sends ONE Telegram message per problem when it starts
-and one when it clears. Silent while everything is fine.
+    python3 watchdog.py --cloud    # GitHub Actions, every ~10 min (telegram-check.yml): the cloud run chain,
+                                   # the cloud's shops (moves blocked ones to the Mac), the Telegram token
+    python3 watchdog.py --server   # Oracle server, every 10 min (systemd pokemon-watchdog.timer): the server's
+                                   # monitor service and shops, pulls new code, and checks the cloud chain
+                                   # from outside GitHub
+    python3 watchdog.py            # Mac role (launchd job unloaded since 2026-10-27; kept for manual runs)
+    add --dry-run to print findings, change nothing, send nothing
 
-    python3 watchdog.py            # normal run
-    python3 watchdog.py --dry-run  # print findings, change nothing, send nothing
+Each role fixes what it can and sends ONE Telegram message per problem when it starts and one when it
+clears. Silent while everything is fine.
 """
 import datetime as dt
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -24,8 +30,10 @@ STATE = HERE / "state.json"
 LOG = HERE / "monitor.log"
 WD_STATE = HERE / "watchdog_state.json"
 PLIST = Path.home() / "Library/LaunchAgents/com.pokemon-monitor.plist"
-GH = "/opt/homebrew/bin/gh"
+GH = "/opt/homebrew/bin/gh" if os.path.exists("/opt/homebrew/bin/gh") else (shutil.which("gh") or "")
 DRY = "--dry-run" in sys.argv
+ROLE = "cloud" if "--cloud" in sys.argv else "server" if "--server" in sys.argv else "Mac"
+REPO = "c2z9kp7ddd-create/pokemon-monitor"
 
 
 def sh(*cmd, timeout=60):
@@ -37,6 +45,8 @@ def sh(*cmd, timeout=60):
 
 
 def online():
+    if ROLE == "cloud":
+        return True  # a GitHub runner is online by definition
     try:
         monitor.get_json("https://api.takealot.com/rest/v-1-12-0/searches/products?qsearch=pokemon", timeout=15, tries=1)
         return True
@@ -97,7 +107,7 @@ def check_mac(fix):
 def check_cloud(fix):
     """Problems with the GitHub copy. Fix: start a run if the chain has stopped."""
     problems = {}
-    if not os.path.exists(GH):
+    if not GH:
         return problems
     code, out = sh(GH, "run", "list", "--workflow", "monitor.yml", "--limit", "6",
                    "--json", "status,conclusion,createdAt")
@@ -122,6 +132,63 @@ def check_cloud(fix):
     if len(done) == 3 and all(r["conclusion"] not in ("success", "cancelled") for r in done):
         problems["cloud_failing"] = "The last 3 cloud runs failed."
     return problems
+
+
+def check_server(fix):
+    """Problems with the Oracle server copy (run there). Fixes: restart the systemd service."""
+    problems = {}
+    code, out = sh("systemctl", "is-active", "pokemon-monitor")
+    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    age = mins_since(state.get("last_run", ""))
+    if out.strip() != "active" or age > 12:
+        problems["server_stale"] = ("The server monitor was not running." if out.strip() != "active"
+                                    else f"No full scan on the server for {age:.0f} minutes.")
+        if fix:
+            c, _ = sh("sudo", "systemctl", "restart", "pokemon-monitor")
+            problems["server_stale"] += " Restarted it." if c == 0 else " Restart failed."
+        return problems
+    code, out = sh("journalctl", "-u", "pokemon-monitor", "--since", "10 min ago", "--no-pager", "-o", "cat")
+    beats = re.findall(r"^(?:quick scan|fast30|watch) \d\d:\d\d", out, re.M)
+    if code == 0 and len(beats) < 5:
+        problems["server_beat"] = f"Only {len(beats)} every-minute checks on the server in the last 10 minutes."
+        if fix:
+            sh("sudo", "systemctl", "restart", "pokemon-monitor")
+            problems["server_beat"] += " Restarted it."
+    return problems
+
+
+def update_server_code(fix):
+    """The server runs whatever GitHub has: pull, and restart the monitor when the code changed."""
+    if not fix:
+        return {}
+    _, before = sh("git", "rev-parse", "HEAD")
+    c, out = sh("git", "pull", "-q", "--ff-only", timeout=90)
+    _, after = sh("git", "rev-parse", "HEAD")
+    if c != 0:
+        return {"server_pull": "The server could not update its code from GitHub: " + out.strip()[:100]}
+    if before != after:
+        print(f"updated code {before.strip()[:7]} -> {after.strip()[:7]}, restarting the monitor")
+        sh("sudo", "systemctl", "restart", "pokemon-monitor")
+    return {}
+
+
+def check_cloud_public():
+    """The cloud run chain seen from outside GitHub (public API, read only). If GitHub Actions stops,
+    the cloud watchdog stops with it, so the server is the one that can tell."""
+    try:
+        d = monitor.get_json(f"https://api.github.com/repos/{REPO}/actions/workflows/monitor.yml/runs?per_page=5",
+                             timeout=20, tries=2)
+    except Exception:
+        return {}  # GitHub API unreachable: can't judge
+    runs = d.get("workflow_runs", [])
+    if not runs:
+        return {"cloud_none": "The cloud monitor has no runs."}
+    last = max(dt.datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")) for r in runs)
+    idle = (dt.datetime.now(dt.timezone.utc) - last).total_seconds() / 60
+    if idle > 20 and not any(r["status"] != "completed" for r in runs):
+        return {"cloud_stalled": f"The cloud monitor has not started a run for {idle:.0f} minutes. "
+                                 "Start it from GitHub (Actions, pokemon-monitor, Run workflow)."}
+    return {}
 
 
 CLOSED_WORDS = ("back soon", "be back", "closed", "maintenance", "opening soon", "password")
@@ -158,7 +225,7 @@ def pokemon_collection(store):
 
 def cloud_store_results():
     """{store: 'ok' | error text} from the last 8 completed cloud runs (newest wins)."""
-    if not os.path.exists(GH):
+    if not GH:
         return None
     # the cloud searches each Shopify shop about every 20 min (5 shops per ~5-min run), so look back 8 runs
     code, out = sh(GH, "run", "list", "--workflow", "monitor.yml", "--limit", "10", "--json", "databaseId,status")
@@ -189,15 +256,22 @@ def check_stores(fix, wd):
     Returns ({problem_id: text}, [config changes made])."""
     cfg = json.loads((HERE / "config.json").read_text())
     mac_only = set(cfg.get("local_only_stores", []))
+    server = set(cfg.get("server_stores", [])) & mac_only
+    if cfg.get("local_owner") == "server":
+        server = set(mac_only)
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
-    mac = state.get("stores", {})
-    cloud = cloud_store_results()
+    mac = state.get("stores", {})  # this machine's own scan results (Mac or server)
+    cloud = cloud_store_results() if ROLE in ("cloud", "Mac") else None
     fails = wd.setdefault("store_fails", {})
     problems, changes, rows = {}, [], []
     for st in cfg["stores"]:
         name = st["name"]
-        owner = "Mac" if name in mac_only else "cloud"
-        if owner == "Mac":
+        owner = "server" if name in server else "Mac" if name in mac_only else "cloud"
+        if owner != ROLE and not (ROLE == "Mac" and owner == "cloud"):
+            rows.append(f"{name}: {owner} (checked by the {owner} watchdog)" if owner != "Mac"
+                        else f"{name}: Mac (not checked: the Mac's own watchdog is off)")
+            continue
+        if owner in ("Mac", "server"):
             x = mac.get(name)
             if x is None:
                 err = "never scanned"
@@ -244,9 +318,16 @@ def check_stores(fix, wd):
             elif owner == "Mac" and ("never" in err or "min ago" in err):
                 sh("launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.pokemon-monitor")
                 fixed = " Restarted the Mac scan."
+            elif owner == "server" and "min ago" in err:
+                sh("sudo", "systemctl", "restart", "pokemon-monitor")
+                fixed = " Restarted the server scan."
         problems[f"store:{name}"] = f"{name} ({owner}): {err[:90]}.{fixed}"
     if changes and fix:
         (HERE / "config.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+        if ROLE == "cloud":  # the Mac picks the change up with its next git pull (sync.sh)
+            sh("git", "config", "user.name", "github-actions[bot]")
+            sh("git", "config", "user.email", "41898283+github-actions[bot]@users.noreply.github.com")
+            sh("git", "pull", "-q", "--rebase")
         sh("git", "add", "config.json")
         sh("git", "commit", "-q", "-m", "Watchdog: " + "; ".join(changes)
            + "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
@@ -258,8 +339,7 @@ def check_stores(fix, wd):
 def check_telegram():
     """The alert channel itself: the saved bot token must still be accepted."""
     try:
-        sec = json.loads((HERE / "secrets.json").read_text())
-        token = sec["telegram"]["token"]
+        token = os.environ.get("TELEGRAM_TOKEN") or json.loads((HERE / "secrets.json").read_text())["telegram"]["token"]
         monitor.get_json(f"https://api.telegram.org/bot{token}/getMe", timeout=15, tries=2)
         return {}
     except Exception as e:
@@ -274,15 +354,21 @@ def main():
         print(f"{dt.datetime.now():%H:%M} watchdog: no internet, skipped")
         return
     problems = {}
-    problems.update(check_mac(fix=not DRY))
-    problems.update(check_cloud(fix=not DRY))
+    if ROLE == "Mac":
+        problems.update(check_mac(fix=not DRY))
+    if ROLE == "server":
+        problems.update(update_server_code(fix=not DRY))
+        problems.update(check_server(fix=not DRY))
+        problems.update(check_cloud_public())
+    else:
+        problems.update(check_cloud(fix=not DRY))
     problems.update(check_telegram())
     store_problems, _ = check_stores(not DRY, wd)
     problems.update(store_problems)
     now = time.time()
     opened = {k: v for k, v in problems.items() if k not in wd["open"]}
     cleared = [k for k in wd["open"] if k not in problems]
-    print(f"{dt.datetime.now():%H:%M} watchdog: {len(problems)} problem(s): {problems or 'all fine'}")
+    print(f"{dt.datetime.now():%H:%M} watchdog ({ROLE}): {len(problems)} problem(s): {problems or 'all fine'}")
     if DRY:
         return
     # a problem must be seen on two runs in a row before it is reported, so a blip after
@@ -300,7 +386,7 @@ def main():
         text = "\n".join(other)
         if shops:
             text += ("\n\n" if other else "") + "Shops not being monitored:\n" + "\n".join(shops)
-        monitor.notify("Pokemon monitor problem", text, channel="status")
+        monitor.notify(f"Pokemon monitor problem ({ROLE} watchdog)", text, channel="status")
         for k, v in report.items():
             wd["open"][k] = {"since": now, "text": v}
             pending.pop(k, None)

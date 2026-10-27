@@ -1,8 +1,11 @@
 name: telegram-check
 
-# Independent of the Mac's network: checks every 10 minutes that the Telegram bot token is accepted
-# and the bot can reach the alert chat. Silent while fine. When Telegram is broken the job fails,
-# so GitHub emails the repo owner (guards.py fails a run only when a problem is new, then every 6 h).
+# Independent of the Mac's network, every ~10 minutes:
+#  1. Telegram: the bot token is accepted and the bot can reach the alert chat. When Telegram is broken
+#     the job fails, so GitHub emails the repo owner (only when a problem is new, then every 6 h).
+#  2. The watchdog (watchdog.py --cloud): restarts the monitor's run chain if it stopped, checks every
+#     cloud shop was scanned, moves shops that block the cloud to the Mac, alerts the status group.
+# Silent while fine.
 on:
   schedule:
     - cron: "*/10 * * * *"
@@ -13,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write  # the watchdog commits config.json when it moves a blocked shop to the Mac
   actions: write   # restarts the monitor's run chain if it has stopped
 
 jobs:
@@ -37,6 +40,30 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GH_TOKEN: ${{ github.token }}
+
+      # the watchdog's memory (open problems, failure counts) lives in the Actions cache, like state.json
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: always()
+        with:
+          path: watchdog_state.json
+          key: watchdog-${{ github.run_id }}
+          restore-keys: watchdog-
+
+      - name: Watchdog
+        if: always()
+        continue-on-error: true   # a watchdog bug must not stop the Telegram check's run chain
+        timeout-minutes: 6
+        run: python3 watchdog.py --cloud
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: always() && hashFiles('watchdog_state.json') != ''
+        with:
+          path: watchdog_state.json
+          key: watchdog-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: always() && hashFiles('health/cloud_alerts.json') != ''
