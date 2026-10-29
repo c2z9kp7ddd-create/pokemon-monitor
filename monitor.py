@@ -1512,6 +1512,9 @@ def cloud_watchdog():
     try:
         out = subprocess.run([gh, "run", "list", "--workflow", "monitor.yml", "--limit", "5",
                               "--json", "status,conclusion,createdAt"], cwd=HERE, capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:  # GitHub unreachable or login expired: no run list, so nothing to judge
+            print("cloud watchdog: could not list cloud runs:", (out.stderr or "").strip()[:200], file=sys.stderr)
+            return
         runs = json.loads(out.stdout or "[]")
         active = any(r["status"] != "completed" for r in runs)
         last = max((dt.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")) for r in runs), default=None)
@@ -1525,8 +1528,10 @@ def cloud_watchdog():
         elif done and done[0].get("conclusion") == "success" and flag.exists():
             flag.unlink()
         if stale and not active:
-            subprocess.run([gh, "workflow", "run", "monitor.yml", "--ref", "main"], cwd=HERE, timeout=30)
-            print("cloud watchdog: restarted cloud monitor")
+            if subprocess.run([gh, "workflow", "run", "monitor.yml", "--ref", "main"], cwd=HERE, timeout=30).returncode == 0:
+                print("cloud watchdog: restarted cloud monitor")
+            else:
+                print("cloud watchdog: restart of cloud monitor failed", file=sys.stderr)
     except Exception as e:
         print("cloud watchdog failed:", e, file=sys.stderr)
 
