@@ -1866,3 +1866,8 @@ if __name__ == "__main__":
         run_forever()
     else:
         main()
+        # state is saved; leftover pool threads stuck on a dead connection (Mac asleep or offline) kept the
+        # process alive ~30 min after the run ended, and launchd starts no new run while it lives (2026-10-30)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
