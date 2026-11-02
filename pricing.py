@@ -133,6 +133,11 @@ def decide(label, title, price_zar, store, cfg, fx=1.0, value=None, value_source
     passes_retail = bool(ref) and comparable <= ref * (1 + tol) + 1e-9
     passes_collector = bool(value) and comparable < value
     if not ref and not value:
+        if label in (cfg.get("alert_without_reference") or []) and landed.confirmed:
+            # Gideon 2026-11-02: never miss a buyable 30th product just because no price reference exists
+            d.qualifies, d.estimated, d.code = True, True, "no_reference_alert"
+            d.reason = f"no SA retail price on file for this product: R{comparable:,.0f}, check it yourself"
+            return d
         d.reason, d.code = ("no collector value to compare" if collector_only
                             else "no retail or collector price to compare"), "no_reference"
         return d

@@ -162,3 +162,18 @@ class ThirtiethTolerance(unittest.TestCase):
 
     def test_reason_says_how_far_above_retail(self):
         self.assertIn("23% above retail", self.d("Pokemon TCG 30th Celebration Elite Trainer Box", 1600).reason)
+
+
+class NoReference30th(unittest.TestCase):
+    def setUp(self):
+        import json, pathlib
+        self.cfg = json.loads((pathlib.Path(__file__).resolve().parent.parent / "config.json").read_text())
+
+    def test_30th_without_reference_still_alerts(self):
+        d = pricing.decide("30TH ANNIVERSARY", "pokemon 30th celebration pikachu bundle", 1999, {"name": "X"}, self.cfg)
+        self.assertTrue(d.qualifies)
+        self.assertEqual(d.code, "no_reference_alert")
+
+    def test_other_lines_without_reference_do_not(self):
+        d = pricing.decide("DELTA REIGN", "pokemon delta reign pikachu bundle", 1999, {"name": "X"}, self.cfg)
+        self.assertFalse(d.qualifies)

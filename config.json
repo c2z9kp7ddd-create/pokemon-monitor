@@ -519,7 +519,13 @@
   "local_owner": "mac",
   "telegram_status_chat_id": "-5560345589",
   "server_stores": [
-    "Geek Zone"
+    "Fantasy Gaming",
+    "Geek Zone",
+    "Magic The Trading",
+    "Otaku Kulture",
+    "Silver Toy Shop",
+    "The Geek Home",
+    "ThunderBolt Gaming"
   ],
   "alert_chat_ids": [
     "-1004331055622"
@@ -528,5 +534,8 @@
   "shopify_light_only": true,
   "retail_tolerance_by_label": {
     "30TH ANNIVERSARY": 0.5
-  }
+  },
+  "alert_without_reference": [
+    "30TH ANNIVERSARY"
+  ]
 }
