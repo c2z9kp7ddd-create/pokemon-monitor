@@ -137,3 +137,28 @@ class OfficialRetail(unittest.TestCase):
                            official=self.OFFICIAL)
         self.assertTrue(d.qualifies)
         self.assertEqual(d.retail_kind, "exact")
+
+
+class ThirtiethTolerance(unittest.TestCase):
+    """Gideon 2026-11-02: 30th products at retail or somewhat above (up to +50%) alert; scalper prices don't."""
+    def setUp(self):
+        import json, pathlib
+        self.cfg = json.loads((pathlib.Path(__file__).resolve().parent.parent / "config.json").read_text())
+
+    def d(self, title, price, label="30TH ANNIVERSARY"):
+        return pricing.decide(label, title.lower(), price, {"name": "X"}, self.cfg)
+
+    def test_slightly_above_retail_alerts(self):
+        self.assertTrue(self.d("Pokemon TCG 30th Celebration Elite Trainer Box", 1600).qualifies)       # Mithril Vault
+        self.assertTrue(self.d("Pokemon TCG 30th Celebration Battle Deck", 699.9).qualifies)            # Toys R Us shelf price
+        self.assertTrue(self.d("Pokemon TCG 30th Celebration Booster Bundle", 950).qualifies)
+
+    def test_scalper_prices_do_not(self):
+        self.assertFalse(self.d("Pokemon TCG 30th Celebration - Elite Trainer Box", 3999).qualifies)     # Takealot marketplace
+        self.assertFalse(self.d("Pokemon TCG 30th Celebration - 2-Pack Blister", 1099).qualifies)
+
+    def test_other_lines_keep_15_percent(self):
+        self.assertFalse(self.d("Pokemon Delta Reign Elite Trainer Box", 1600, "DELTA REIGN").qualifies)
+
+    def test_reason_says_how_far_above_retail(self):
+        self.assertIn("23% above retail", self.d("Pokemon TCG 30th Celebration Elite Trainer Box", 1600).reason)

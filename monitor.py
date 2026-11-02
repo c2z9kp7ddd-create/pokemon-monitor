@@ -350,6 +350,7 @@ def official_prices(state):
     return [(norm(i["title"]), i["price"], i["store"]) for i in state.get("items", {}).values()
             if i.get("store") in names and i.get("price") and i.get("last_seen", "") >= cutoff and is_tcg(i["title"])]
 
+ALERT_POLICY = 3  # 3: 30th products alert up to retail +50% (2026-11-02); 2: retail +15% (2026-10-20)
 DIGEST = []  # set to a list to collect alerts instead of sending them one by one (first sweep after deploy)
 
 def consider(state, it, source, verified=None):
@@ -1820,7 +1821,8 @@ def main():
                      if i.get("in_stock") and current(i) and mine(i["store"]) and i["store"] in known and is_30th(i["title"])]
         # The old code alerted only on changes, so listings already buyable at a good price were never
         # announced. The first sweep under this policy sends them as ONE summary, not a burst of messages.
-        first_sweep = not state.get("alert_policy", 0) >= 2
+        # bump ALERT_POLICY whenever the price rules change, so listings that newly qualify arrive as one summary
+        first_sweep = not state.get("alert_policy", 0) >= ALERT_POLICY
         if first_sweep:
             DIGEST[:] = [True]
         try:
@@ -1829,7 +1831,7 @@ def main():
             found, DIGEST[:] = DIGEST[1:], []
         if first_sweep:
             send_digest(found)
-            state["alert_policy"] = 2
+            state["alert_policy"] = ALERT_POLICY
         print(f"full-scan candidates: {len(cands)}, alerts {'in summary' if first_sweep else 'sent'}: {sent}")
     update_watchlist(deals, state)
     heartbeat(state, results, deals)

@@ -118,7 +118,8 @@ def decide(label, title, price_zar, store, cfg, fx=1.0, value=None, value_source
         return Decision(False, "no price shown", "no_price")
     landed = landed_cost(price_zar, store, cfg.get("international"), fx)
     comparable = landed.total if landed.confirmed else landed.lower_bound
-    tol = cfg.get("retail_tolerance", 0.15)
+    # per-product-line tolerance (Gideon 2026-11-02: 30th products at retail or somewhat above must alert)
+    tol = (cfg.get("retail_tolerance_by_label") or {}).get(label, cfg.get("retail_tolerance", 0.15))
     ref, kind, source = (None, None, None)
     collector_only = label in ("BOOSTER BOX", "ETB")
     if not collector_only:
@@ -136,7 +137,7 @@ def decide(label, title, price_zar, store, cfg, fx=1.0, value=None, value_source
                             else "no retail or collector price to compare"), "no_reference"
         return d
     if not (passes_retail or passes_collector):
-        what = "collector value" if collector_only else "retail +15% and collector value"
+        what = "collector value" if collector_only else f"retail +{tol:.0%} and collector value"
         d.reason, d.code = f"R{comparable:,.0f}{'+' if not landed.confirmed else ''} is above {what}", "overpriced"
         return d
     if not landed.confirmed:  # would pass on the minimum cost, but the real cost is unknown
@@ -146,7 +147,9 @@ def decide(label, title, price_zar, store, cfg, fx=1.0, value=None, value_source
     d.estimated = kind != "exact" or not landed.confirmed
     if passes_retail:
         d.code = "retail"
-        d.reason = (f"at retail: R{comparable:,.0f} vs SA shelf ~R{ref:,.0f} "
+        pct = comparable / ref - 1
+        level = "at or below retail" if pct <= 0.005 else f"{pct:.0%} above retail"
+        d.reason = (f"{level}: R{comparable:,.0f} vs SA shelf ~R{ref:,.0f} "
                     f"({'exact product' if kind == 'exact' else 'estimate for this product type'})")
     else:
         d.code = "collector"

@@ -99,8 +99,8 @@ class Pipeline(unittest.TestCase):
         self.assertFalse(self.sent)
 
     def test_price_is_rechecked_on_the_product_page(self):
-        # search said R1,299, the product page says R1,899: above retail +15%, so no alert
-        self.assertFalse(self.run_with(item(price=1299), (monitor.IN_STOCK, 1899.0, "product page: available")))
+        # search said R1,299, the product page says R2,100: above retail +50% (30th tolerance), so no alert
+        self.assertFalse(self.run_with(item(price=1299), (monitor.IN_STOCK, 2100.0, "product page: available")))
         self.assertFalse(self.sent)
 
     def test_overpriced_listing_is_rejected_before_any_request(self):
