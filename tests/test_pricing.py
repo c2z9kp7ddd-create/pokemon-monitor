@@ -177,3 +177,21 @@ class NoReference30th(unittest.TestCase):
     def test_other_lines_without_reference_do_not(self):
         d = pricing.decide("DELTA REIGN", "pokemon delta reign pikachu bundle", 1999, {"name": "X"}, self.cfg)
         self.assertFalse(d.qualifies)
+
+
+class SpcUpcTolerance(unittest.TestCase):
+    """Gideon 2026-11-05: be alert for UPCs and SPCs: up to retail +50%, or with no reference; not scalper prices."""
+    def setUp(self):
+        import json, pathlib
+        self.cfg = json.loads((pathlib.Path(__file__).resolve().parent.parent / "config.json").read_text())
+
+    def d(self, title, price):
+        return pricing.decide("SPC/UPC", title.lower(), price, {"name": "X"}, self.cfg)
+
+    def test_somewhat_above_retail_alerts(self):
+        self.assertTrue(self.d("Prismatic Evolutions Super Premium Collection", 3500).qualifies)
+        self.assertTrue(self.d("Mega Charizard ex Ultra-Premium Collection", 5500).qualifies)
+
+    def test_scalper_prices_do_not(self):
+        self.assertFalse(self.d("Prismatic Evolutions Super Premium Collection", 6999).qualifies)
+        self.assertFalse(self.d("151 Mew Ultra Premium Collection", 9700).qualifies)

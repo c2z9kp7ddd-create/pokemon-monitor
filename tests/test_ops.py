@@ -367,3 +367,25 @@ class ForeignShopsReadLightly(unittest.TestCase):
             monitor.scan_shopify("Cloud shop", "https://x")
             monitor.scan_shopify("Mine", "https://y")
         self.assertEqual(calls, [("light", "Cloud shop"), ("light", "Mine")])   # shopify_light_only
+
+
+class SpcUpcSearch(unittest.TestCase):
+    """A shop read through its 30th collection must still be searched for UPCs and SPCs."""
+    def test_premium_beat_searches_instead_of_reading_the_collection(self):
+        st = next(s for s in monitor.CONFIG["stores"] if s.get("fast_collection"))
+        urls = []
+        def fake(url, **k):
+            urls.append(url)
+            return {"resources": {"results": {"products": []}}, "products": []}
+        with mock.patch.object(monitor, "get_json", fake), mock.patch.object(monitor, "next_fast_term", return_value="ultra premium"):
+            monitor.fast_fetch(st)
+        self.assertTrue(urls and all("search/suggest.json" in u for u in urls), urls)
+        urls.clear()
+        with mock.patch.object(monitor, "get_json", fake), mock.patch.object(monitor, "next_fast_term", return_value="30th"):
+            monitor.fast_fetch(st)
+        self.assertTrue(urls and all("/collections/" in u for u in urls), urls)
+
+    def test_terms_cover_upc_and_spc(self):
+        for t in ("ultra premium", "super premium"):
+            self.assertIn(t, monitor.LIGHT_TERMS)
+            self.assertIn(t, monitor.CONFIG["fast_30th"]["queries"])

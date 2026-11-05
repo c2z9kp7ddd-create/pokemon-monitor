@@ -394,7 +394,9 @@
       "delta reign",
       "elite trainer",
       "booster box",
-      "premium collection"
+      "premium collection",
+      "ultra premium",
+      "super premium"
     ],
     "workers": 6
   },
@@ -541,9 +543,11 @@
   "foreign_rescan_minutes": 30,
   "shopify_light_only": true,
   "retail_tolerance_by_label": {
-    "30TH ANNIVERSARY": 0.5
+    "30TH ANNIVERSARY": 0.5,
+    "SPC/UPC": 0.5
   },
   "alert_without_reference": [
-    "30TH ANNIVERSARY"
+    "30TH ANNIVERSARY",
+    "SPC/UPC"
   ]
 }

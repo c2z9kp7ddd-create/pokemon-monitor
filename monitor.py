@@ -350,7 +350,7 @@ def official_prices(state):
     return [(norm(i["title"]), i["price"], i["store"]) for i in state.get("items", {}).values()
             if i.get("store") in names and i.get("price") and i.get("last_seen", "") >= cutoff and is_tcg(i["title"])]
 
-ALERT_POLICY = 3  # 3: 30th products alert up to retail +50% (2026-11-02); 2: retail +15% (2026-10-20)
+ALERT_POLICY = 4  # 4: SPC/UPC alert up to retail +50% or with no reference (2026-11-05); 3: 30th products alert up to retail +50% (2026-11-02); 2: retail +15% (2026-10-20)
 DIGEST = []  # set to a list to collect alerts instead of sending them one by one (first sweep after deploy)
 
 def consider(state, it, source, verified=None):
@@ -510,7 +510,7 @@ def scan_shopify(store, base, max_pages=40):
     with SHOPIFY_GATE:
         return _scan_shopify(store, base, max_pages)
 
-LIGHT_TERMS = ("30th", "delta reign", "elite trainer", "booster box")  # one search per wanted target
+LIGHT_TERMS = ("30th", "delta reign", "elite trainer", "booster box", "ultra premium", "super premium")  # one search per wanted target
 
 def scan_shopify_light(store, base):
     """Every wanted listing via Shopify's product search, in-stock first: one small request per term."""
@@ -1234,7 +1234,8 @@ def fast_fetch(st):
     base = st["url"].split("/collections/")[0]
     q = next_fast_term(name)
     out = []
-    if kind == "shopify" and st.get("fast_collection"):
+    # UPC / SPC beats always search: a shop's 30th or sealed collection need not contain them
+    if kind == "shopify" and st.get("fast_collection") and not re.search(r"premium", q, re.I):
         # shops whose search is flooded by singles, tokens or books: read a small 30th / sealed collection instead
         fc = st["fast_collection"]
         prods = []
