@@ -192,7 +192,8 @@ def check_cloud_public():
 
 
 CLOSED_WORDS = ("back soon", "be back", "closed", "maintenance", "opening soon", "password")
-FIXABLE_CLOUD = ("429", "403")       # the cloud is rate-limited or blocked: the Mac can cover the shop
+FIXABLE_CLOUD = ("403",)  # blocked for good: the Oracle server may reach it. A 429 is temporary throttling and
+                          # never moves a shop: moving those left shops unchecked whenever the Mac slept
 BUDGET = ("budget", "unfinished")    # catalogue too big to scan in time
 
 
@@ -303,9 +304,10 @@ def check_stores(fix, wd):
         if fix:
             if owner == "cloud" and any(c in err for c in FIXABLE_CLOUD) and "Rocket Grunt" not in name:
                 cfg["local_only_stores"] = sorted(mac_only | {name})
+                cfg["server_stores"] = sorted(set(cfg.get("server_stores", [])) | {name})
                 mac_only.add(name)
-                changes.append(f"moved {name} to the Mac (cloud got {err[:40]})")
-                fixed = " Moved it to the Mac, which can reach it."
+                changes.append(f"moved {name} to the Oracle server (cloud got {err[:40]})")
+                fixed = " Moved it to the Oracle server."
             elif any(b in err for b in BUDGET) and st["type"] == "shopify" and "/collections/" not in st["url"]:
                 url = pokemon_collection(st)
                 if url:
