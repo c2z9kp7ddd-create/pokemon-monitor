@@ -453,7 +453,7 @@ class ForeignShopsReadLightly(unittest.TestCase):
 class SpcUpcSearch(unittest.TestCase):
     """A shop read through its 30th collection must still be searched for UPCs and SPCs."""
     def test_premium_beat_searches_instead_of_reading_the_collection(self):
-        st = next(s for s in monitor.CONFIG["stores"] if s.get("fast_collection"))
+        st = next(s for s in monitor.CONFIG["stores"] if s.get("fast_collection") and not s.get("fast_collection_alternate"))
         urls = []
         def fake(url, **k):
             urls.append(url)
