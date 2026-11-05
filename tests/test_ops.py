@@ -321,6 +321,87 @@ class EdenToys(unittest.TestCase):
         self.assertTrue(items[1]["url"].endswith("/products/pok%C3%A9mon-30th-celebration-elite-trainer-box/7900"))
 
 
+class FastCollections(unittest.TestCase):
+    """A 429 on a shop's collection must not stop its searches; alternate shops search every other beat."""
+    ST = {"name": "TK", "type": "shopify", "url": "https://tk", "fast_collection": ["c1"], "fast_collection_alternate": True}
+
+    def setUp(self):
+        monitor.COLLECTION_PAUSE.clear(); monitor.FAST_FLIP.clear(); monitor.FAST_TERM.clear()
+
+    def _empty(self, url, **kw):
+        return {"products": []} if "/collections/" in url else {"resources": {"results": {"products": []}}}
+
+    def test_alternates_collection_and_search(self):
+        with mock.patch.object(monitor, "get_json", side_effect=self._empty) as g:
+            for _ in range(4):
+                monitor.fast_fetch(self.ST)
+        urls = [c.args[0] for c in g.call_args_list]
+        self.assertEqual(["/collections/" in u for u in urls], [True, False, True, False])
+        self.assertIn("q=30th", urls[1])
+        self.assertIn("q=delta", urls[3])
+
+    def test_429_falls_back_to_search_and_pauses_the_collection(self):
+        def fake(url, **kw):
+            if "/collections/" in url:
+                raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+            return self._empty(url)
+        with mock.patch.object(monitor, "get_json", side_effect=fake) as g:
+            monitor.fast_fetch(self.ST)  # must not raise
+            monitor.fast_fetch(self.ST)
+        urls = [c.args[0] for c in g.call_args_list]
+        self.assertEqual(["/collections/" in u for u in urls], [True, False, False])
+        self.assertGreater(monitor.COLLECTION_PAUSE["TK"], time.time())
+
+    def test_search_prefix(self):
+        st = {"name": "D20", "type": "shopify", "url": "https://d", "search_prefix": "pokemon "}
+        with mock.patch.object(monitor, "get_json", side_effect=self._empty) as g:
+            monitor.fast_fetch(st)
+        self.assertIn("q=pokemon+30th", g.call_args.args[0])
+
+
+class JsonLdShops(unittest.TestCase):
+    """Oasis Gaming / Multi-Verse: wanted sealed pages from the sitemap, stock from each page's JSON-LD."""
+    SITEMAP = """<url><loc>https://s/products/30th-celebration-elite-trainer-box-me-30th-celebration</loc></url>
+    <url><loc>https://s/products/alolan-meowth-me-30th-celebration-139-128</loc></url>
+    <url><loc>https://s/product/delta-reign-booster-box-me06-delta-reign</loc></url>
+    <url><loc>https://s/products/gioteck-tx50-headset</loc></url>
+    <url><loc>https://s/products/30th-celebration-m6a-japanese-booster-box</loc></url>"""
+
+    @staticmethod
+    def page(avail, name="Pok&eacute;mon TCG 30th Celebration - Elite Trainer Box", offers=None):
+        o = offers or {"@type": "Offer", "price": "1299.00", "availability": "https://schema.org/" + avail}
+        return '<script type="application/ld+json">{"@type":"Organization"}</script>' \
+               '<script type="application/ld+json">' + json.dumps({"@type": "Product", "name": name, "offers": o}) + "</script>"
+
+    def setUp(self):
+        monitor.JSONLD_URLS.clear(); monitor.JSONLD_TURN.clear()
+
+    def test_sitemap_keeps_wanted_sealed_only(self):
+        with mock.patch.object(monitor, "get_html", return_value=self.SITEMAP):
+            got = [u.rsplit("/", 1)[-1] for u, _ in monitor.jsonld_urls({"name": "S", "url": "https://s"})]
+        self.assertEqual(got, ["30th-celebration-elite-trainer-box-me-30th-celebration", "delta-reign-booster-box-me06-delta-reign"])
+
+    def test_stock_from_page(self):
+        with mock.patch.object(monitor, "get_html", return_value=self.page("OutOfStock")):
+            self.assertFalse(monitor.jsonld_product("S", "https://s/products/x")["in_stock"])
+        with mock.patch.object(monitor, "get_html", return_value=self.page("InStock")):
+            it = monitor.jsonld_product("S", "https://s/products/x")
+        self.assertTrue(it["in_stock"])
+        self.assertEqual(it["price"], 1299.0)
+        self.assertIn("Pokemon TCG 30th", it["title"])
+
+    def test_aggregate_offer_price(self):
+        o = {"@type": "AggregateOffer", "lowPrice": "1799.00", "availability": "https://schema.org/PreOrder"}
+        with mock.patch.object(monitor, "get_html", return_value=self.page("", offers=o)):
+            status, price, _ = monitor._verify("jsonld", {}, "x", "https://s/products/x", {})
+        self.assertEqual((status, price), (monitor.PREORDER, 1799.0))
+
+    def test_no_offer_is_an_error_not_sold_out(self):
+        with mock.patch.object(monitor, "get_html", return_value="<html>blocked</html>"):
+            with self.assertRaises(ValueError):
+                monitor.jsonld_product("S", "https://s/products/x")
+
+
 class AmazonZA(unittest.TestCase):
     """Amazon.co.za product pages: buyable only with an add-to-cart button and no 'currently unavailable'."""
     PAGE = ('<span id="productTitle" class="a-size-large"> Pok&eacute;mon TCG 30th Celebration - Elite Trainer Box </span>'

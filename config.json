@@ -102,8 +102,11 @@
       "url": "https://toykingdom.co.za",
       "fast_collection": [
         "pokemon-30th-celebration",
-        "pokemon-30th-anniversary"
-      ]
+        "pokemon-30th-anniversary",
+        "pokemon-mega-evolution-6-delta-reign",
+        "pokemon-pre-order-2026"
+      ],
+      "fast_collection_alternate": true
     },
     {
       "name": "Toys R Us",
@@ -171,7 +174,9 @@
       "name": "Aniware",
       "type": "shopify",
       "url": "https://sealed.aniware.co.za/collections/pokemon",
-      "fast_collection": "30th-celebration"
+      "fast_collection": "30th-celebration",
+      "fast_collection_alternate": true,
+      "fast_seconds": 15
     },
     {
       "name": "The Geek Home",
@@ -187,7 +192,9 @@
       "name": "Big Bang Shop",
       "type": "shopify",
       "url": "https://bigbangshop.co.za/collections/pokemon-trading-card-game",
-      "fast_collection": "pokemon-tcg-30th-celebration"
+      "fast_collection": "pokemon-tcg-30th-celebration",
+      "fast_collection_alternate": true,
+      "fast_seconds": 15
     },
     {
       "name": "WZRD TCG",
@@ -332,6 +339,58 @@
       ],
       "scan_every_minutes": 15,
       "rotation_seconds": 20
+    },
+    {
+      "name": "Legendary Loot",
+      "type": "shopify",
+      "url": "https://legendaryloot.co.za"
+    },
+    {
+      "name": "Green Monkey",
+      "type": "shopify",
+      "url": "https://greenmonkey.co.za"
+    },
+    {
+      "name": "Pokadopa",
+      "type": "shopify",
+      "url": "https://pokadopa.com"
+    },
+    {
+      "name": "Battle Bunker",
+      "type": "shopify",
+      "url": "https://thebattlebunker.co.za"
+    },
+    {
+      "name": "D20 Battleground",
+      "type": "shopify",
+      "url": "https://d20battleground.co.za",
+      "search_prefix": "pokemon "
+    },
+    {
+      "name": "Pokemon South Africa",
+      "type": "shopify",
+      "url": "https://www.pokemonsouthafrica.store"
+    },
+    {
+      "name": "Comic Warehouse",
+      "type": "woo",
+      "url": "https://comicwarehouse.co.za"
+    },
+    {
+      "name": "Oasis Gaming",
+      "type": "jsonld",
+      "url": "https://oasisgaming.co.za",
+      "fast_seconds": 10,
+      "scan_every_minutes": 15,
+      "watch_every_seconds": 600
+    },
+    {
+      "name": "Multi-Verse",
+      "type": "jsonld",
+      "url": "https://multi-verse.co.za",
+      "fast_seconds": 10,
+      "scan_every_minutes": 15,
+      "watch_every_seconds": 600
     }
   ],
   "resale": {
@@ -354,14 +413,19 @@
     "Fantasy Gaming",
     "Geek Zone",
     "Kitsune Relics",
+    "Level Up Store",
     "Magic The Trading",
     "Marvellous Hobbies",
     "Maximus Games",
+    "Multi-Verse",
+    "Oasis Gaming",
     "Otaku Kulture",
     "Pops Toys",
     "Silver Toy Shop",
     "The Geek Home",
-    "ThunderBolt Gaming"
+    "ThunderBolt Gaming",
+    "Toy Kingdom",
+    "Weebforce"
   ],
   "updates": {
     "new_listings": true,
@@ -531,13 +595,18 @@
   "server_stores": [
     "Fantasy Gaming",
     "Geek Zone",
+    "Level Up Store",
     "Magic The Trading",
     "Maximus Games",
+    "Multi-Verse",
+    "Oasis Gaming",
     "Otaku Kulture",
     "Pops Toys",
     "Silver Toy Shop",
     "The Geek Home",
-    "ThunderBolt Gaming"
+    "ThunderBolt Gaming",
+    "Toy Kingdom",
+    "Weebforce"
   ],
   "alert_chat_ids": [
     "-1004331055622"

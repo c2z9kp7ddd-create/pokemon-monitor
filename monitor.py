@@ -290,6 +290,14 @@ def _verify(kind, st, pid, url, it):
         if not qty:
             return UNKNOWN, None, "product page: no stock count"
         return (IN_STOCK if int(qty.group(1)) > 0 else OUT_OF_STOCK), price, f"product page: {qty.group(1)} in stock"
+    if kind == "jsonld":
+        _, price, avail = jsonld_offer(get_html(url))
+        price = float(price) if price else it.get("price")
+        if avail in ("PreOrder", "BackOrder"):
+            return PREORDER, price, "product page: pre-order"
+        if avail in ("InStock", "LimitedAvailability"):
+            return IN_STOCK, price, "product page: in stock"
+        return OUT_OF_STOCK, price, "product page: sold out"
     if kind == "mithril":
         h = get_html(url)
         if BLOCK_PAGE.search(h):
@@ -519,7 +527,7 @@ def scan_shopify_light(store, base):
     for term in LIGHT_TERMS:
         check_deadline()
         url = f"{root}/search/suggest.json?" + urllib.parse.urlencode({
-            "q": term, "resources[type]": "product", "resources[limit]": 10,
+            "q": (STORE_BY_NAME.get(store) or {}).get("search_prefix", "") + term, "resources[type]": "product", "resources[limit]": 10,
             "resources[options][unavailable_products]": "last"})
         with SHOPIFY_GATE:
             d = get_json(url, tries=1, timeout=15)
@@ -759,6 +767,69 @@ def scan_eden(store, base):
         raise ValueError("Eden Toys category page has no product cards (layout changed or blocked)")
     return out
 
+# Custom-built shops with no search API (Oasis Gaming, Multi-Verse): robots.txt allows the sitemap and product
+# pages, and each product page states price and availability in schema.org JSON-LD, so that is what is read.
+JSONLD_FAST_LABELS = ("30TH ANNIVERSARY", "DELTA REIGN", "SPC/UPC")
+JSONLD_URLS, JSONLD_TURN = {}, {}
+JSONLD_SINGLE = re.compile(r"-\d{2,3}(-\d+)?$")  # "alolan-meowth-me-30th-celebration-139-128": a single card
+
+def jsonld_urls(st):
+    """Wanted sealed product URLs from a shop's sitemap, [(url, title from the slug)], refreshed every 15 minutes."""
+    name, root = st["name"], st["url"].rstrip("/")
+    c = JSONLD_URLS.get(name)
+    if c and time.time() - c[0] < 900:
+        return c[1]
+    out = []
+    for u in re.findall(r"<loc>([^<]+)</loc>", get_html(root + "/sitemap.xml")):
+        m = re.search(r"/products?/([^/?#]+)$", u)
+        if not m or JSONLD_SINGLE.search(m.group(1)):
+            continue
+        t = m.group(1).replace("-", " ")
+        if anniversary(t) and is_tcg(t, "pokemon"):
+            out.append((u, t))
+    if not out:
+        raise ValueError(f"{name}: sitemap lists no wanted products (layout changed or blocked)")
+    JSONLD_URLS[name] = (time.time(), out)
+    return out
+
+def jsonld_offer(page):
+    """(title, price, schema.org availability word) from a product page's JSON-LD."""
+    for raw in re.findall(r'application/ld\+json[^>]*>(.*?)</script', page, re.S):
+        try:
+            d = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("@type") == "Product" and isinstance(d.get("offers"), dict):
+            o = d["offers"]
+            return (html.unescape(d.get("name") or ""), o.get("price") or o.get("lowPrice"),
+                    str(o.get("availability") or "").rsplit("/", 1)[-1])
+    raise ValueError("product page has no JSON-LD offer (layout changed or blocked)")
+
+def jsonld_product(store, url):
+    title, price, avail = jsonld_offer(get_html(url))
+    return item(store, url.rsplit("/", 1)[-1], title, url, price, avail in ("InStock", "LimitedAvailability", "PreOrder", "BackOrder"))
+
+def scan_jsonld(store, base):
+    """Every wanted product page, politely spaced; a long list carries on where the last pass stopped."""
+    st = STORE_BY_NAME.get(store) or {"name": store, "url": base}
+    urls = jsonld_urls(st)
+    limit = st.get("pages_per_scan", 40)
+    start = JSONLD_TURN.get(store + "|scan", 0) % len(urls)
+    JSONLD_TURN[store + "|scan"] = start + limit
+    out = []
+    for u, _ in (urls[start:] + urls[:start])[:limit]:
+        check_deadline()
+        try:
+            it = jsonld_product(store, u)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:  # listing removed since the sitemap was written
+                continue
+            raise
+        if is_tcg(it["title"], "pokemon"):
+            out.append(it)
+        time.sleep(1)
+    return out
+
 # Amazon.co.za (Gideon 2026-10-21). Its search page answers scripts with a bot check, which is not
 # worked around. Its category / best-seller / new-release pages and product pages load normally and
 # robots.txt does not disallow them, so: discover products on those listing pages, then read each
@@ -859,7 +930,7 @@ def scan_amazon(store, base):
 
 SCANNERS = {"shopify": scan_shopify, "woo": scan_woo, "checkers": scan_checkers,
             "takealot": scan_takealot, "magento": scan_magento, "mithril": scan_mithril, "eden": scan_eden,
-            "amazon": scan_amazon}
+            "amazon": scan_amazon, "jsonld": scan_jsonld}
 
 # ---------------------------------------------------------------- notify
 
@@ -1081,8 +1152,8 @@ def quick_fetch(st):
                                     f"https://www.takealot.com/{core['slug']}/PLID{core['id']}",
                                     (bb.get("prices") or [None])[0], bb.get("is_add_to_cart_available")))
         return out
-    if kind == "checkers":
-        return []  # covered by the 5-second 30th checks; the full scan reads every page every 5 minutes
+    if kind in ("checkers", "jsonld"):
+        return []  # covered by the fast checks; the full scan reads every wanted page
     return SCANNERS[kind](name, base)  # magento store is small: full scan is cheap
 
 def quick_scan(state):
@@ -1221,6 +1292,9 @@ AMAZON_TURN = [-1]
 
 FAST_TERM = {}  # store -> index of the search term used on its last fast check
 
+COLLECTION_PAUSE = {}  # shop -> when its collection reads may resume after a 429
+FAST_FLIP = {}         # shop -> did the last beat read its collection (fast_collection_alternate)
+
 def next_fast_term(store):
     """Each fast check searches the next wanted term in turn ("30th", "delta reign", "elite trainer",
     "booster box"): same request rate, but every wanted product is covered, not only 30th listings."""
@@ -1232,21 +1306,41 @@ def fast_fetch(st):
     """The shop's wanted listings for this beat's search term, available ones first: [item]."""
     name, kind = st["name"], st["type"]
     base = st["url"].split("/collections/")[0]
-    q = next_fast_term(name)
     out = []
-    # UPC / SPC beats always search: a shop's 30th or sealed collection need not contain them
-    if kind == "shopify" and st.get("fast_collection") and not re.search(r"premium", q, re.I):
-        # shops whose search is flooded by singles, tokens or books: read a small 30th / sealed collection instead
+    # a shop whose collection answers 429 keeps being searched meanwhile: its 429 used to pause every
+    # fast check for 15 minutes, so Toy Kingdom, Level Up and Weebforce went unwatched (2026-11-05)
+    coll = kind == "shopify" and st.get("fast_collection") and COLLECTION_PAUSE.get(name, 0) <= time.time()
+    if coll and st.get("fast_collection_alternate"):
+        # the collection only holds 30th (or pre-order) lines: every other beat searches the next term,
+        # so Delta Reign, UPCs and ETBs are still covered at these shops
+        FAST_FLIP[name] = coll = not FAST_FLIP.get(name, False)
+        q = None if coll else next_fast_term(name)
+    else:
+        q = next_fast_term(name)
+        # UPC / SPC beats always search: a shop's 30th or sealed collection need not contain them
+        coll = coll and not re.search(r"premium", q, re.I)
+    if coll:
+        # shops whose search is flooded by singles, tokens or books, or that hide 30th lines from it
         fc = st["fast_collection"]
         prods = []
-        for h in ([fc] if isinstance(fc, str) else fc):
-            with SHOPIFY_GATE:
-                prods += get_json(f"{base}/collections/{h}/products.json?limit=250", tries=1, timeout=15)["products"]
-        for p in prods:
-            out.append(shopify_item(name, base, p))
+        try:
+            for h in ([fc] if isinstance(fc, str) else fc):
+                with SHOPIFY_GATE:
+                    prods += get_json(f"{base}/collections/{h}/products.json?limit=250", tries=1, timeout=15)["products"]
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                raise
+            COLLECTION_PAUSE[name] = time.time() + CONFIG["cooldown_minutes"] * 60
+            print(f"{name}: collection read got 429, searching only for {CONFIG['cooldown_minutes']} min", flush=True)
+            coll, q = False, q or next_fast_term(name)
+        else:
+            for p in prods:
+                out.append(shopify_item(name, base, p))
+    if coll:
+        pass  # read above
     elif kind == "shopify":
         url = f"{base}/search/suggest.json?" + urllib.parse.urlencode({
-            "q": q, "resources[type]": "product", "resources[limit]": 10,
+            "q": st.get("search_prefix", "") + q, "resources[type]": "product", "resources[limit]": 10,
             "resources[options][unavailable_products]": "last"})  # in-stock first: a restock is always in the top 10
         with SHOPIFY_GATE:
             d = get_json(url, tries=1, timeout=10)
@@ -1258,6 +1352,13 @@ def fast_fetch(st):
             pr = p.get("prices") or {}
             price = int(pr["price"]) / 10 ** pr.get("currency_minor_unit", 2) if pr.get("price") else None
             out.append(item(name, p["id"], p["name"], p["permalink"], price, p.get("is_in_stock") or p.get("is_on_backorder")))
+    elif kind == "jsonld":
+        # no search API: one product page per beat, in turn; other wanted lines wait for the full scan
+        pages = [u for u, t in jsonld_urls(st) if anniversary(t) in JSONLD_FAST_LABELS]
+        if pages:
+            JSONLD_TURN[name] = (JSONLD_TURN.get(name, -1) + 1) % len(pages)
+            return [jsonld_product(name, pages[JSONLD_TURN[name]])]
+        return []
     elif kind == "checkers":
         # no search without a login: one 30th product page per beat, in turn
         pages = [u for u, t in checkers_urls(base) if anniversary(t) == "30TH ANNIVERSARY"]
@@ -1301,7 +1402,7 @@ def fast_loop(state, stop):
     cfg = CONFIG["fast_30th"]
     base_wait = cfg["seconds"]
     stores = [st for st in active_stores() if mine(st["name"])
-              and st["type"] in ("shopify", "woo", "takealot", "checkers", "amazon")
+              and st["type"] in ("shopify", "woo", "takealot", "checkers", "amazon", "jsonld")
               and st["name"] not in cfg.get("skip", [])]
     known = known_stores(state)
     # cloud: reading a whole 30th collection is a much bigger request than a search; every 5 s from
