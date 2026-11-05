@@ -58,7 +58,8 @@ def is_tcg(title, context=""):
     """context: store metadata (Shopify vendor/product type) that can say 'Pokemon' when the title doesn't."""
     t = norm(title)
     # some shops drop "Pokemon" from titles ("30th Celebration Elite Trainer Box", "Mega Evolution: ...")
-    return (has_any(t + " " + norm(context), ["pokemon", "30th celebration", "mega evolution", "delta reign"])
+    return (has_any(t + " " + norm(context), ["pokemon", "30th celebration", "mega evolution", "delta reign",
+                                              "ultra-premium collection", "ultra premium collection", "super premium collection"])
             and has_any(t, CONFIG["tcg_words"])
             and not has_any(t, CONFIG["exclude_words"])
             and not SINGLE_CARD.search(t))

@@ -25,3 +25,5 @@ print("\nRESULTS")
 for st in shops:
     c = tally[st["name"]]
     print(f"{'OK     ' if set(c) == {'ok'} else 'ERRORS '} {st['name']:22s} {dict(c)}")
+if m.COLLECTION_PAUSE:  # the fast check falls back to search on a collection 429, so "ok" alone hides it
+    print("COLLECTION 429:", ", ".join(sorted(m.COLLECTION_PAUSE)))

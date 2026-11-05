@@ -359,6 +359,12 @@ class FastCollections(unittest.TestCase):
         self.assertIn("q=pokemon+30th", g.call_args.args[0])
 
 
+class UpcTitles(unittest.TestCase):
+    def test_upc_without_the_word_pokemon_counts(self):
+        self.assertTrue(monitor.is_tcg("Prismatic Evolutions Super Premium Collection"))
+        self.assertTrue(monitor.is_tcg("Team Rocket's Moltres ex Ultra-Premium Collection"))
+
+
 class JsonLdShops(unittest.TestCase):
     """Oasis Gaming / Multi-Verse: wanted sealed pages from the sitemap, stock from each page's JSON-LD."""
     SITEMAP = """<url><loc>https://s/products/30th-celebration-elite-trainer-box-me-30th-celebration</loc></url>

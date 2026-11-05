@@ -142,7 +142,7 @@ status message, after 45 minutes without a successful check.
 
 | Check | Target | In practice (cloud) |
 |---|---|---|
-| 30th listings (search / small 30th collection, in-stock first) | every 5 s per shop | 5 s at most shops; 30 s at the 7 shops read via a 30th collection (Toy Kingdom, Level Up, Aniware, Big Bang, WZRD, Readers Warehouse, Weebforce). A shop that errors backs off, doubling up to 120 s |
+| 30th listings (search / small 30th collection, in-stock first) | every 5 s per shop | 5 s at most shops. Shops read via a collection: every 30 s (5 s gets 429), from the Oracle server for Toy Kingdom, Level Up and Weebforce, where GitHub gets 429 even at 30 s, and from GitHub for Aniware, Big Bang, WZRD and Readers Warehouse. Toy Kingdom, Aniware and Big Bang alternate collection and search beats, and a 429 on a collection falls back to search for 15 minutes. Oasis Gaming and Multi-Verse have no search API: one product page every 10 s. A shop that errors backs off, doubling up to 120 s |
 | 1-minute check (WooCommerce, Takealot, Toys R Us; newest + wanted searches) | 60 s | ~60-70 s. In the cloud Shopify shops skip it (their 5-second checks cover it) |
 | Sold-out wanted listings, product page | 60 s | WooCommerce / Takealot / Checkers; Shopify is not polled from the cloud (throttled), its restocks show in the in-stock-first 5 s checks |
 | Full scan of every shop | 5 min | non-Shopify every run; in the cloud each Shopify shop is searched about every 20 min (5 shops per run) |
@@ -230,7 +230,7 @@ Adding a target: one row in `matching.TARGETS` plus genuine and near-miss titles
   summary: shops "ok", rejections listed, Telegram failures 0.
 * GitHub and Telegram unreachable from the Mac: some networks (FortiGate) block both and break HTTPS
   to some shops. The cloud is unaffected; the Mac's queued messages go out once it is back online.
-* A cloud shop keeps failing with 403/429: the Mac watchdog moves it to `local_only_stores`.
+* A cloud shop keeps failing with 403: the Mac watchdog moves it to the Oracle server. A 429 is temporary and never moves a shop.
 * Run killed or cancelled: state is saved after every alert and at the end; the next run restores it.
 
 ## 12. Known limitations
