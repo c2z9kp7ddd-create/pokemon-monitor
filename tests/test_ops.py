@@ -359,6 +359,17 @@ class FastCollections(unittest.TestCase):
         self.assertIn("q=pokemon+30th", g.call_args.args[0])
 
 
+class CollectionTurns(unittest.TestCase):
+    def test_one_collection_per_beat_in_turn(self):
+        monitor.COLLECTION_PAUSE.clear(); monitor.FAST_FLIP.clear(); monitor.COLLECTION_TURN.clear()
+        st = {"name": "T", "type": "shopify", "url": "https://t", "fast_collection": ["a", "b"]}
+        with mock.patch.object(monitor, "get_json", return_value={"products": []}) as g, \
+             mock.patch.object(monitor, "next_fast_term", return_value="30th"):
+            for _ in range(3):
+                monitor.fast_fetch(st)
+        self.assertEqual([c.args[0].split("/")[4] for c in g.call_args_list], ["a", "b", "a"])
+
+
 class UpcTitles(unittest.TestCase):
     def test_upc_without_the_word_pokemon_counts(self):
         self.assertTrue(monitor.is_tcg("Prismatic Evolutions Super Premium Collection"))

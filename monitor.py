@@ -1293,6 +1293,7 @@ AMAZON_TURN = [-1]
 
 FAST_TERM = {}  # store -> index of the search term used on its last fast check
 
+COLLECTION_TURN = {}   # shop -> which of its collections was read last
 COLLECTION_PAUSE = {}  # shop -> when its collection reads may resume after a 429
 FAST_FLIP = {}         # shop -> did the last beat read its collection (fast_collection_alternate)
 
@@ -1322,17 +1323,20 @@ def fast_fetch(st):
         coll = coll and not re.search(r"premium", q, re.I)
     if coll:
         # shops whose search is flooded by singles, tokens or books, or that hide 30th lines from it
+        # one collection per beat, in turn: Shopify's limit on these reads is per IP across all shops
         fc = st["fast_collection"]
+        fc = [fc] if isinstance(fc, str) else fc
+        COLLECTION_TURN[name] = (COLLECTION_TURN.get(name, -1) + 1) % len(fc)
         prods = []
         try:
-            for h in ([fc] if isinstance(fc, str) else fc):
-                with SHOPIFY_GATE:
-                    prods += get_json(f"{base}/collections/{h}/products.json?limit=250", tries=1, timeout=15)["products"]
+            with SHOPIFY_GATE:
+                prods = get_json(f"{base}/collections/{fc[COLLECTION_TURN[name]]}/products.json?limit=250", tries=1, timeout=15)["products"]
         except urllib.error.HTTPError as e:
             if e.code != 429:
                 raise
-            COLLECTION_PAUSE[name] = time.time() + CONFIG["cooldown_minutes"] * 60
-            print(f"{name}: collection read got 429, searching only for {CONFIG['cooldown_minutes']} min", flush=True)
+            pause = CONFIG["fast_30th"].get("collection_pause_seconds", 180)  # reads recover within minutes
+            COLLECTION_PAUSE[name] = time.time() + pause
+            print(f"{name}: collection read got 429, searching only for {pause} s", flush=True)
             coll, q = False, q or next_fast_term(name)
         else:
             for p in prods:

@@ -102,12 +102,12 @@
       "url": "https://toykingdom.co.za",
       "fast_collection": [
         "pokemon-30th-celebration",
-        "pokemon-30th-anniversary",
         "pokemon-mega-evolution-6-delta-reign",
+        "pokemon-30th-anniversary",
         "pokemon-pre-order-2026"
       ],
       "fast_collection_alternate": true,
-      "fast_seconds": 15
+      "fast_seconds": 10
     },
     {
       "name": "Toys R Us",
@@ -465,7 +465,8 @@
       "ultra premium",
       "super premium"
     ],
-    "workers": 6
+    "workers": 6,
+    "collection_pause_seconds": 180
   },
   "full_scan_seconds": 300,
   "probe_local_only": false,
