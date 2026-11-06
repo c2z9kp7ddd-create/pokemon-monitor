@@ -1429,7 +1429,9 @@ def fast_loop(state, stop):
         t = time.time()
         for st in stores:
             n = st["name"]
-            if n in running or due[n] > t or max(cool.get(n, 0), cool.get(n + "|fast", 0)) > t:
+            # only a 429 on the fast check itself pauses it: a throttled full scan (heavier, and its own
+            # pause) took 21 shops out of the fast checks for 15 minutes on 2026-11-06 while searches passed
+            if n in running or due[n] > t or cool.get(n + "|fast", 0) > t:
                 continue
             running[n] = (ex.submit(fast_fetch, st), t)
         for n, (f, started) in list(running.items()):
