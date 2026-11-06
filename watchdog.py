@@ -298,7 +298,8 @@ def check_stores(fix, wd):
                 err = "never scanned"
             elif not x.get("ok"):
                 err = x.get("error") or "failed"
-            elif mins_since(x.get("at", "")) > 15:
+            elif (mins_since(x.get("at", "")) > 15 and  # full scans are spaced out; any good check counts
+                  time.time() - (state.get("shop_stats", {}).get(name) or {}).get("last_ok", 0) > 15 * 60):
                 err = f"last scanned {mins_since(x['at']):.0f} min ago"
             else:
                 err = None

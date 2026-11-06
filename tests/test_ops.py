@@ -110,7 +110,7 @@ class Ownership(unittest.TestCase):
             self.assertEqual({s["name"] for s in monitor.active_stores()}, set(monitor.CONFIG["server_stores"]))
             with mock.patch.dict(monitor.CONFIG, {"local_owner": "server"}):
                 self.assertTrue(monitor.mine("Checkers"))
-                self.assertFalse(monitor.mine("Takealot"))               # never duplicates the cloud
+                self.assertFalse(monitor.mine("Aniware"))               # never duplicates the cloud
 
     def test_no_shop_has_two_owners(self):
         owners = {}

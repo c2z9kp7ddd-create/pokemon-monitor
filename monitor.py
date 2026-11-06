@@ -494,7 +494,7 @@ def check_deadline():
         raise OutOfTime("scan time budget used up")
 
 # Shopify rate-limits per IP across all its stores: one at a time in the cloud; the Mac isn't throttled
-SHOPIFY_GATE = threading.Semaphore(1 if IS_GITHUB else 3 if IS_SERVER else 8)
+SHOPIFY_GATE = threading.Semaphore(1 if IS_GITHUB else 5 if IS_SERVER else 8)
 
 def item(store, pid, title, url, price, in_stock):
     return {"key": f"{store}|{pid}", "store": store, "title": norm(title), "url": url,
@@ -1839,7 +1839,7 @@ def main():
         n = st["name"]
         if cool.get(n, 0) > time.time():
             skipped.append(n)  # throttled us recently: leave it alone for a while
-        elif (IS_GITHUB and st["type"] == "shopify"
+        elif (IS_CLOUD and st["type"] == "shopify"
               and time.time() - last_ok.get(n, 0) < CONFIG["shopify_rescan_minutes"] * 60):
             skipped.append(n)  # full Shopify catalogues are heavy; rescan each one every N minutes
         elif (not IS_GITHUB and not mine(n)
@@ -1852,11 +1852,13 @@ def main():
             if st.get("scan_every_minutes"):
                 state["last_scan_try"][n] = time.time()
             todo.append(st)
-    if IS_GITHUB:
+    if IS_CLOUD:
         # Shopify limits each IP across all its shops: a few shops per run, least recently scanned first,
-        # so the searches don't land in one burst on top of the 5-second checks
+        # so the searches don't land in one burst on top of the 5-second checks. A shop new to this copy goes
+        # straight away: its fast checks stay silent until its first scan records what it already has
         shop = sorted((st for st in todo if st["type"] == "shopify"), key=lambda st: last_ok.get(st["name"], 0))
         keep = {st["name"] for st in shop[:CONFIG.get("github_shopify_per_run", 5)]}
+        keep |= {st["name"] for st in shop if st["name"] not in known}
         skipped += [st["name"] for st in shop if st["name"] not in keep]
         todo = [st for st in todo if st["type"] != "shopify" or st["name"] in keep]
     if IS_GITHUB and CONFIG.get("probe_local_only"):
