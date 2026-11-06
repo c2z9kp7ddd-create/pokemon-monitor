@@ -134,6 +134,24 @@ def check_cloud(fix):
     return problems
 
 
+RESTART_MARK = HERE / ".server_restarted"
+RESTART_GAP_SECONDS = 30 * 60
+
+def restart_server(force=False):
+    """Restart the server monitor at most once per watchdog run, and not again within RESTART_GAP_SECONDS unless
+    it is down: one restart per stale shop tripped systemd's start limit and left it stopped for 16 hours
+    (2026-11-05), and a restart cannot fix a shop that is merely throttled. Returns True if it restarted fine."""
+    try:
+        recent = time.time() - RESTART_MARK.stat().st_mtime < RESTART_GAP_SECONDS
+    except OSError:
+        recent = False
+    if recent and not force:
+        return False
+    RESTART_MARK.touch()
+    sh("sudo", "systemctl", "reset-failed", "pokemon-monitor")
+    return sh("sudo", "systemctl", "restart", "pokemon-monitor")[0] == 0
+
+
 def check_server(fix):
     """Problems with the Oracle server copy (run there). Fixes: restart the systemd service."""
     problems = {}
@@ -144,15 +162,17 @@ def check_server(fix):
         problems["server_stale"] = ("The server monitor was not running." if out.strip() != "active"
                                     else f"No full scan on the server for {age:.0f} minutes.")
         if fix:
-            c, _ = sh("sudo", "systemctl", "restart", "pokemon-monitor")
-            problems["server_stale"] += " Restarted it." if c == 0 else " Restart failed."
+            down = out.strip() != "active"
+            if restart_server(force=down):
+                problems["server_stale"] += " Restarted it."
+            else:
+                problems["server_stale"] += " Restart failed." if down else " Restarted recently, not restarting again."
         return problems
     code, out = sh("journalctl", "-u", "pokemon-monitor", "--since", "10 min ago", "--no-pager", "-o", "cat")
     beats = re.findall(r"^(?:quick scan|fast30|watch) \d\d:\d\d", out, re.M)
     if code == 0 and len(beats) < 5:
         problems["server_beat"] = f"Only {len(beats)} every-minute checks on the server in the last 10 minutes."
-        if fix:
-            sh("sudo", "systemctl", "restart", "pokemon-monitor")
+        if fix and restart_server():
             problems["server_beat"] += " Restarted it."
     return problems
 
@@ -321,8 +341,7 @@ def check_stores(fix, wd):
                 sh("launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.pokemon-monitor")
                 fixed = " Restarted the Mac scan."
             elif owner == "server" and "min ago" in err:
-                sh("sudo", "systemctl", "restart", "pokemon-monitor")
-                fixed = " Restarted the server scan."
+                fixed = " Restarted the server scan." if restart_server() else ""
         problems[f"store:{name}"] = f"{name} ({owner}): {err[:90]}.{fixed}"
     if changes and fix:
         (HERE / "config.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False))

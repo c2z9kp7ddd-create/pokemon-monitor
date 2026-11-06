@@ -1244,10 +1244,11 @@ def watch_loop(state, until):
             print("scan report failed:", e, file=sys.stderr)
         cool = state.setdefault("cooldown", {})
         names = {st["name"] for st in active_stores()}  # cloud leaves Mac-only shops to the Mac
-        # cloud: Shopify restocks show up in the 5-second checks (in-stock first), so their product pages
-        # aren't polled as well; ~325 page reads a minute from GitHub's shared IPs got throttled
+        # cloud and server: Shopify restocks show up in the fast checks, so their product pages aren't polled
+        # as well; ~325 page reads a minute got GitHub's IPs throttled, and on the server (2026-11-05) bursts
+        # got its IP a 429 at every Shopify shop, pausing them all until the watchdog thought they were stale
         due = [(k, w) for k, w in watch.items() if w["store"] in names
-               and not (IS_GITHUB and STORE_BY_NAME.get(w["store"], {}).get("type") == "shopify")
+               and not (IS_CLOUD and STORE_BY_NAME.get(w["store"], {}).get("type") == "shopify")
                and max(cool.get(w["store"], 0), cool.get(w["store"] + "|watch", 0)) <= time.time()
                and time.time() - w.get("polled", 0) >= STORE_BY_NAME.get(w["store"], {}).get("watch_every_seconds", 0)]
         due.sort(key=lambda kw: kw[1].get("polled", 0))

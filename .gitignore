@@ -15,3 +15,4 @@ guards.log
 .amazon_asins.json
 sync.log
 com.pokemon-sync.plist
+.server_restarted

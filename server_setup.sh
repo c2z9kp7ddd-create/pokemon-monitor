@@ -18,6 +18,7 @@ sudo tee /etc/systemd/system/pokemon-monitor.service >/dev/null <<UNIT
 Description=SA Pokemon stock monitor
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 User=$USER

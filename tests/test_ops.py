@@ -8,6 +8,7 @@ import unittest.mock as mock
 import urllib.error
 
 from helpers import fresh_state, isolate, monitor
+import watchdog
 
 
 class FakeResp:
@@ -357,6 +358,31 @@ class FastCollections(unittest.TestCase):
         with mock.patch.object(monitor, "get_json", side_effect=self._empty) as g:
             monitor.fast_fetch(st)
         self.assertIn("q=pokemon+30th", g.call_args.args[0])
+
+
+class ServerRestarts(unittest.TestCase):
+    """One restart per stale shop left the server stopped for 16 hours (start-limit-hit, 2026-11-05)."""
+    def setUp(self):
+        import tempfile, pathlib
+        self.mark = pathlib.Path(tempfile.mkdtemp()) / "mark"
+
+    def _calls(self, runs, force=False):
+        with mock.patch.object(watchdog, "RESTART_MARK", self.mark), \
+             mock.patch.object(watchdog, "sh", return_value=(0, "")) as sh:
+            out = [watchdog.restart_server(force=force) for _ in range(runs)]
+        return out, [c.args for c in sh.call_args_list if "restart" in c.args]
+
+    def test_many_stale_shops_restart_once(self):
+        out, restarts = self._calls(14)
+        self.assertEqual(out, [True] + [False] * 13)
+        self.assertEqual(len(restarts), 1)
+
+    def test_a_stopped_service_is_always_restarted_and_limit_cleared(self):
+        self._calls(1)
+        with mock.patch.object(watchdog, "RESTART_MARK", self.mark), \
+             mock.patch.object(watchdog, "sh", return_value=(0, "")) as sh:
+            self.assertTrue(watchdog.restart_server(force=True))
+        self.assertEqual([c.args[2] for c in sh.call_args_list], ["reset-failed", "restart"])
 
 
 class CollectionTurns(unittest.TestCase):
