@@ -66,7 +66,7 @@ def is_tcg(title, context=""):
 
 # "Cosmog 013/025", "SWSH123", "Mimikyu 075 ... Promo Cards": individual cards, not sealed product
 SINGLE_CARD = re.compile(r"\[mega evolution[^\]]*\]|\b\d{1,3}/\d{1,3}|\bbasic \w+ energy\b|\b(swsh|svp|smp|xyp)\s?\d+|\b\d{3}\b.*promo cards?\b|\b[rgb]/rgb\b"
-                         r"|\b(reverse )?holo(foil)?\b(?!.*\b(box|tin|collection box|pack)\b)|^[^-]*\b\d{3} - |\b(common|uncommon|(double |illustration |ultra |secret |hyper )?rare)\s*$", re.I)
+                         r"|\b(reverse )?holo(foil)?\b(?!.*\b(box|tin|collection box|pack)\b)|^[^-]*\b\d{3} - |\b(common|uncommon|(double |illustration |ultra |secret |hyper )?rare)\s*$|\bpromo\)?\s*$", re.I)
 
 THIRTIETH = matching.TARGETS[0][1]  # also used to repair Mithril Vault titles
 

@@ -401,6 +401,9 @@ class UpcTitles(unittest.TestCase):
         self.assertTrue(monitor.is_tcg("Prismatic Evolutions Super Premium Collection"))
         self.assertTrue(monitor.is_tcg("Team Rocket's Moltres ex Ultra-Premium Collection"))
 
+    def test_a_promo_card_from_a_upc_is_not_the_upc(self):
+        self.assertFalse(monitor.is_tcg("Eevee ex 174 (Super Premium Collection Promo)"))
+
 
 class JsonLdShops(unittest.TestCase):
     """Oasis Gaming / Multi-Verse: wanted sealed pages from the sitemap, stock from each page's JSON-LD."""
