@@ -394,6 +394,11 @@
       "fast_seconds": 10,
       "scan_every_minutes": 15,
       "watch_every_seconds": 600
+    },
+    {
+      "name": "Pandemonium Games",
+      "type": "shopify",
+      "url": "https://www.pandemoniumgames.co.za"
     }
   ],
   "resale": {
@@ -437,6 +442,7 @@
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
+    "Pandemonium Games",
     "Pokadopa",
     "Poke Store",
     "PokePlugZA",
@@ -645,6 +651,7 @@
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
+    "Pandemonium Games",
     "Pokadopa",
     "Poke Store",
     "PokePlugZA",
