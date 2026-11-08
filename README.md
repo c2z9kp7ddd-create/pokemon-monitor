@@ -28,7 +28,10 @@ A listing alerts only when ALL of these hold **[code: matching.py, pricing.py, m
    XY Evolutions ETB is now just an ETB (collector test). A test guards against them coming back.
 2. **Buyable**, confirmed on the product's own page or product API just before sending (not a search
    index): `in stock` or an open `pre-order`. A failed request, a captcha or a page with no clear stock
-   signal is `unknown` and never alerts; a 404 is `listing gone`.
+   signal is `unknown` and never alerts; a 404 is `listing gone`. Exception (2026-11-08): a page that
+   answers 429/503 is asked again after 5 s and 15 s, and if it is still busy the shop's own listing data,
+   read seconds earlier, decides (message says "Checked on the shop listing"). On Delta Reign day the 429s
+   held in-stock boxes back for 20 min to 3.5 h. Sold-out watch checks never use this fallback.
 3. **Passes its price test** on the verified price (section 2).
 4. **Not a repeat** (section 4).
 
