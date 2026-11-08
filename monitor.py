@@ -202,19 +202,31 @@ def merge_item(state, it, now, known, events=None):
 
 # ---------------------------------------------------------------- product-page verification
 
+VERIFY_RETRY_WAITS = (5, 15)  # seconds before re-asking a product page that answered 429/503
+
 def verify_listing(it):
     """Ask the product's own page or product API (not a search index or cached listing) whether it can be
     bought right now: (status, rand price or None, detail). Never raises."""
     st = STORE_BY_NAME.get(it["store"]) or {}
     kind, pid, url = st.get("type"), it["key"].split("|", 1)[1], it["url"]
-    try:
-        status, price, detail = _verify(kind, st, pid, url, it)
-    except urllib.error.HTTPError as e:
-        if e.code in (404, 410):
-            return GONE, None, f"product page returned {e.code}"
-        return UNKNOWN, None, f"check failed: HTTP {e.code}"
-    except Exception as e:  # timeouts, DNS, bad JSON, layout changes
-        return UNKNOWN, None, f"check failed: {type(e).__name__}: {str(e)[:80]}"
+    for wait in VERIFY_RETRY_WAITS + (None,):
+        try:
+            status, price, detail = _verify(kind, st, pid, url, it)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                return GONE, None, f"product page returned {e.code}"
+            if e.code in (429, 503) and wait is not None:
+                time.sleep(wait)
+                continue
+            # Delta Reign day (6 Nov): product pages answered 429 for hours, and in-stock boxes the shop's own
+            # listing showed went out 20 min to 3.5 h late, one full scan per retry. The listing data (Shopify
+            # variant "available", Woo is_in_stock) was read seconds ago from the shop itself: trust it then.
+            if e.code in (429, 503) and it.get("in_stock") is True and it.get("price"):
+                return IN_STOCK, None, f"shop listing: available (product page busy, HTTP {e.code})"
+            return UNKNOWN, None, f"check failed: HTTP {e.code}"
+        except Exception as e:  # timeouts, DNS, bad JSON, layout changes
+            return UNKNOWN, None, f"check failed: {type(e).__name__}: {str(e)[:80]}"
     if price is not None and st.get("currency", "ZAR") != "ZAR":
         price = round(price * zar_per(st["currency"]), 2)
     if status in BUYABLE and PREORDER_WORDS.search(it["title"]):
@@ -781,8 +793,10 @@ def jsonld_urls(st):
     if c and time.time() - c[0] < 900:
         return c[1]
     out = []
-    for u in re.findall(r"<loc>([^<]+)</loc>", get_html(root + "/sitemap.xml")):
-        m = re.search(r"/products?/([^/?#]+)$", u)
+    for u in re.findall(r"<loc>([^<]+)</loc>", get_html(root + st.get("sitemap", "/sitemap.xml"))):
+        u = html.unescape(u.strip())
+        # "/products/<slug>", or House of TCG's "product.php?slug=<slug>"
+        m = re.search(r"/products?/([^/?#]+)$", u) or re.search(r"/product\.php\?slug=([^&#]+)$", u)
         if not m or JSONLD_SINGLE.search(m.group(1)):
             continue
         t = m.group(1).replace("-", " ")
@@ -800,10 +814,13 @@ def jsonld_offer(page):
             d = json.loads(raw)
         except ValueError:
             continue
-        if isinstance(d, dict) and d.get("@type") == "Product" and isinstance(d.get("offers"), dict):
-            o = d["offers"]
-            return (html.unescape(d.get("name") or ""), o.get("price") or o.get("lowPrice"),
-                    str(o.get("availability") or "").rsplit("/", 1)[-1])
+        # a bare Product, a list of nodes, or House of TCG's {"@graph": [Organization, WebSite, Product, ...]}
+        nodes = d if isinstance(d, list) else (d.get("@graph") or [d]) if isinstance(d, dict) else []
+        for d in nodes:
+            if isinstance(d, dict) and d.get("@type") == "Product" and isinstance(d.get("offers"), dict):
+                o = d["offers"]
+                return (html.unescape(d.get("name") or ""), o.get("price") or o.get("lowPrice"),
+                        str(o.get("availability") or "").rsplit("/", 1)[-1])
     raise ValueError("product page has no JSON-LD offer (layout changed or blocked)")
 
 def jsonld_product(store, url):

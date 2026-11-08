@@ -50,8 +50,27 @@ class Verify(unittest.TestCase):
         self.assertEqual(self.verify(item(store="Testshop"), raises=http_error(404))[0], monitor.GONE)
 
     def test_failures_are_unknown_not_out_of_stock(self):
-        for err in (http_error(503), http_error(429), http_error(403), TimeoutError("slow"), ValueError("bad json")):
-            self.assertEqual(self.verify(item(store="Testshop"), raises=err)[0], monitor.UNKNOWN, err)
+        with mock.patch.object(monitor, "VERIFY_RETRY_WAITS", (0, 0)):
+            for err in (http_error(503), http_error(429), http_error(403), TimeoutError("slow"), ValueError("bad json")):
+                self.assertEqual(self.verify(item(store="Testshop", in_stock=False), raises=err)[0], monitor.UNKNOWN, err)
+            for err in (http_error(403), TimeoutError("slow")):  # only throttling falls back to the listing
+                self.assertEqual(self.verify(item(store="Testshop"), raises=err)[0], monitor.UNKNOWN, err)
+
+    def test_throttled_page_retries_then_trusts_the_listing(self):
+        """6 Nov: product pages answered 429 for hours and in-stock Delta Reign boxes alerted 20 min-3.5 h late."""
+        calls, reply = [], {"available": True, "price": 129900, "variants": [{"available": True, "price": 129900}]}
+        def flaky(*a, **k):
+            calls.append(1)
+            if len(calls) < 3:
+                raise http_error(429)
+            return reply
+        with mock.patch.object(monitor, "VERIFY_RETRY_WAITS", (0, 0)), mock.patch.object(monitor, "get_json", flaky):
+            self.assertEqual(monitor.verify_listing(item(store="Testshop"))[:2], (monitor.IN_STOCK, 1299.0))
+        self.assertEqual(len(calls), 3)
+        with mock.patch.object(monitor, "VERIFY_RETRY_WAITS", (0, 0)):
+            status, price, detail = self.verify(item(store="Testshop"), raises=http_error(429))
+        self.assertEqual((status, price), (monitor.IN_STOCK, None))
+        self.assertTrue(detail.startswith("shop listing"))
 
     def test_woo_backorder_is_preorder(self):
         reply = {"is_purchasable": True, "is_in_stock": True, "is_on_backorder": True,

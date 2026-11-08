@@ -427,6 +427,22 @@ class JsonLdShops(unittest.TestCase):
             got = [u.rsplit("/", 1)[-1] for u, _ in monitor.jsonld_urls({"name": "S", "url": "https://s"})]
         self.assertEqual(got, ["30th-celebration-elite-trainer-box-me-30th-celebration", "delta-reign-booster-box-me06-delta-reign"])
 
+    def test_php_slug_sitemap(self):
+        """House of TCG: sitemap at /home/sitemap.php, products at product.php?slug=..."""
+        sm = """<loc>https://h/home/pages/product.php?slug=pok-mon-mega-evolution-delta-reign-elite-trainer-box</loc>
+        <loc>https://h/home/pages/product.php?slug=pok-mon-mega-evolution-delta-reign-3-pack-blister</loc>
+        <loc>https://h/home/pages/subcategory.php?slug=30th-celebration</loc>"""
+        with mock.patch.object(monitor, "get_html", return_value=sm) as g:
+            got = monitor.jsonld_urls({"name": "H", "url": "https://h", "sitemap": "/home/sitemap.php"})
+        g.assert_called_with("https://h/home/sitemap.php")
+        self.assertEqual([u for u, _ in got], ["https://h/home/pages/product.php?slug=pok-mon-mega-evolution-delta-reign-elite-trainer-box"])
+
+    def test_graph_jsonld(self):
+        g = {"@graph": [{"@type": "Organization"}, {"@type": "Product", "name": "Delta Reign ETB",
+             "offers": {"@type": "Offer", "price": "1399.00", "availability": "https://schema.org/InStock"}}]}
+        page = '<script type="application/ld+json">' + json.dumps(g) + "</script>"
+        self.assertEqual(monitor.jsonld_offer(page), ("Delta Reign ETB", "1399.00", "InStock"))
+
     def test_stock_from_page(self):
         with mock.patch.object(monitor, "get_html", return_value=self.page("OutOfStock")):
             self.assertFalse(monitor.jsonld_product("S", "https://s/products/x")["in_stock"])

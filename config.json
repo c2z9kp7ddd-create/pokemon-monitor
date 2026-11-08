@@ -396,6 +396,15 @@
       "watch_every_seconds": 600
     },
     {
+      "name": "House of TCG",
+      "type": "jsonld",
+      "url": "https://houseoftcg.co.za",
+      "sitemap": "/home/sitemap.php",
+      "fast_seconds": 10,
+      "scan_every_minutes": 15,
+      "watch_every_seconds": 600
+    },
+    {
       "name": "Pandemonium Games",
       "type": "shopify",
       "url": "https://www.pandemoniumgames.co.za"
@@ -439,6 +448,7 @@
     "Maximus Games",
     "Mithril Vault",
     "Multi-Verse",
+    "House of TCG",
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
@@ -648,6 +658,7 @@
     "Maximus Games",
     "Mithril Vault",
     "Multi-Verse",
+    "House of TCG",
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
