@@ -303,7 +303,7 @@ def _verify(kind, st, pid, url, it):
         if not qty:
             return UNKNOWN, None, "product page: no stock count"
         return (IN_STOCK if int(qty.group(1)) > 0 else OUT_OF_STOCK), price, f"product page: {qty.group(1)} in stock"
-    if kind == "jsonld":
+    if kind in ("jsonld", "prestashop"):
         _, price, avail = jsonld_offer(get_html(url))
         price = float(price) if price else it.get("price")
         if avail in ("PreOrder", "BackOrder"):
@@ -780,6 +780,32 @@ def scan_eden(store, base):
         raise ValueError("Eden Toys category page has no product cards (layout changed or blocked)")
     return out
 
+# PrestaShop (A.I. Fest): robots.txt bars the search page, but category pages are allowed and answer
+# Accept: application/json with every product, its price and add_to_cart_url, which is null unless it can be
+# ordered. "[ON REQUEST]" lines have a cart button but no stock. Product pages carry schema.org JSON-LD.
+def scan_prestashop(store, base):
+    st = STORE_BY_NAME.get(store) or {}
+    root = re.match(r"https?://[^/]+", base).group(0)
+    out, seen = [], set()
+    for cat in st.get("categories", []):
+        for page in range(1, 6):  # no check_deadline(): the fast checks call this too, outside any scan
+            d = get_json(f"{root}{cat}?resultsPerPage=100&page={page}", tries=1, timeout=st.get("timeout", 30))
+            for p in d.get("products") or []:
+                pid, title = p.get("id_product"), html.unescape(p.get("name") or "")
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                if not re.search(r"pok[eé]mon", title, re.I):
+                    title = "Pokemon TCG: " + title  # Pokemon categories; shop titles drop the game name
+                if is_tcg(title):
+                    out.append(item(store, pid, title, p.get("url") or p.get("link"), p.get("price_amount"),
+                                    bool(p.get("add_to_cart_url")) and not re.search(r"on request", title, re.I)))
+            if page >= int((d.get("pagination") or {}).get("pages_count") or 1):
+                break
+    if not out:
+        raise ValueError(f"{store}: category pages list no Pokemon products (layout changed or blocked)")
+    return out
+
 # Custom-built shops with no search API (Oasis Gaming, Multi-Verse): robots.txt allows the sitemap and product
 # pages, and each product page states price and availability in schema.org JSON-LD, so that is what is read.
 JSONLD_FAST_LABELS = ("30TH ANNIVERSARY", "DELTA REIGN", "SPC/UPC")
@@ -948,7 +974,7 @@ def scan_amazon(store, base):
 
 SCANNERS = {"shopify": scan_shopify, "woo": scan_woo, "checkers": scan_checkers,
             "takealot": scan_takealot, "magento": scan_magento, "mithril": scan_mithril, "eden": scan_eden,
-            "amazon": scan_amazon, "jsonld": scan_jsonld}
+            "amazon": scan_amazon, "jsonld": scan_jsonld, "prestashop": scan_prestashop}
 
 # ---------------------------------------------------------------- notify
 
@@ -1382,6 +1408,8 @@ def fast_fetch(st):
             JSONLD_TURN[name] = (JSONLD_TURN.get(name, -1) + 1) % len(pages)
             return [jsonld_product(name, pages[JSONLD_TURN[name]])]
         return []
+    elif kind == "prestashop":
+        return scan_prestashop(name, base)  # one category read lists every sealed line with its stock
     elif kind == "checkers":
         # no search without a login: one 30th product page per beat, in turn
         pages = [u for u, t in checkers_urls(base) if anniversary(t) == "30TH ANNIVERSARY"]
@@ -1425,7 +1453,7 @@ def fast_loop(state, stop):
     cfg = CONFIG["fast_30th"]
     base_wait = cfg["seconds"]
     stores = [st for st in active_stores() if mine(st["name"])
-              and st["type"] in ("shopify", "woo", "takealot", "checkers", "amazon", "jsonld")
+              and st["type"] in ("shopify", "woo", "takealot", "checkers", "amazon", "jsonld", "prestashop")
               and st["name"] not in cfg.get("skip", [])]
     known = known_stores(state)
     # cloud: reading a whole 30th collection is a much bigger request than a search; every 5 s from

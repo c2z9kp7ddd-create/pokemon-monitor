@@ -427,6 +427,20 @@ class JsonLdShops(unittest.TestCase):
             got = [u.rsplit("/", 1)[-1] for u, _ in monitor.jsonld_urls({"name": "S", "url": "https://s"})]
         self.assertEqual(got, ["30th-celebration-elite-trainer-box-me-30th-celebration", "delta-reign-booster-box-me06-delta-reign"])
 
+    def test_prestashop_category(self):
+        """A.I. Fest: stock is add_to_cart_url; [ON REQUEST] is not stock; the game name is added to titles."""
+        shop = {"name": "AF", "type": "prestashop", "url": "https://af", "categories": ["/338-sealed"]}
+        reply = {"pagination": {"pages_count": 1}, "products": [
+            {"id_product": 1, "name": "30th Celebration Espeon ex Battle Deck", "url": "https://af/1", "price_amount": 699, "add_to_cart_url": "https://af/cart?add=1"},
+            {"id_product": 2, "name": "30th Celebration Elite Trainer Box", "url": "https://af/2", "price_amount": 1299, "add_to_cart_url": None},
+            {"id_product": 3, "name": "Mega Evolution: Chaos Rising Booster Box [ON REQUEST]", "url": "https://af/3", "price_amount": 3933, "add_to_cart_url": "https://af/cart?add=3"}]}
+        with mock.patch.dict(monitor.STORE_BY_NAME, {"AF": shop}), mock.patch.object(monitor, "get_json", return_value=reply):
+            got = {i["key"]: (i["in_stock"], i["price"], i["title"]) for i in monitor.scan_prestashop("AF", "https://af")}
+        self.assertEqual(got["AF|1"], (True, 699.0, "Pokemon TCG: 30th Celebration Espeon ex Battle Deck"))
+        self.assertFalse(got["AF|2"][0])
+        self.assertFalse(got["AF|3"][0])
+        self.assertEqual(monitor.anniversary(got["AF|1"][2]), "30TH ANNIVERSARY")
+
     def test_php_slug_sitemap(self):
         """House of TCG: sitemap at /home/sitemap.php, products at product.php?slug=..."""
         sm = """<loc>https://h/home/pages/product.php?slug=pok-mon-mega-evolution-delta-reign-elite-trainer-box</loc>

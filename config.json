@@ -405,6 +405,15 @@
       "watch_every_seconds": 600
     },
     {
+      "name": "A.I. Fest",
+      "type": "prestashop",
+      "url": "https://store.ai-fest.co.za",
+      "categories": ["/338-pok-sealed-products", "/198-pok-premium-products"],
+      "fast_seconds": 30,
+      "scan_every_minutes": 15,
+      "watch_every_seconds": 600
+    },
+    {
       "name": "Pandemonium Games",
       "type": "shopify",
       "url": "https://www.pandemoniumgames.co.za"
@@ -449,6 +458,7 @@
     "Mithril Vault",
     "Multi-Verse",
     "House of TCG",
+    "A.I. Fest",
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
@@ -659,6 +669,7 @@
     "Mithril Vault",
     "Multi-Verse",
     "House of TCG",
+    "A.I. Fest",
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
