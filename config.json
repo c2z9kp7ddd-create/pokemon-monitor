@@ -718,5 +718,10 @@
   "alert_without_reference": [
     "30TH ANNIVERSARY",
     "SPC/UPC"
-  ]
+  ],
+  "server_probe": {
+    "host": "84.12.73.185",
+    "user": "ubuntu",
+    "host_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAGKo5Yz6ZkuqGyX6Fbs0DZRWB3IY8MB7OzV2ZsR2sf0"
+  }
 }
