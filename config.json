@@ -408,7 +408,18 @@
       "name": "A.I. Fest",
       "type": "prestashop",
       "url": "https://store.ai-fest.co.za",
-      "categories": ["/338-pok-sealed-products", "/198-pok-premium-products"],
+      "categories": [
+        "/338-pok-sealed-products",
+        "/198-pok-premium-products"
+      ],
+      "fast_seconds": 30,
+      "scan_every_minutes": 15,
+      "watch_every_seconds": 600
+    },
+    {
+      "name": "SATC Gaming",
+      "type": "takeapp",
+      "url": "https://satcgaming.com",
       "fast_seconds": 30,
       "scan_every_minutes": 15,
       "watch_every_seconds": 600
@@ -459,6 +470,7 @@
     "Multi-Verse",
     "House of TCG",
     "A.I. Fest",
+    "SATC Gaming",
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
@@ -670,6 +682,7 @@
     "Multi-Verse",
     "House of TCG",
     "A.I. Fest",
+    "SATC Gaming",
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",

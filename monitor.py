@@ -303,7 +303,7 @@ def _verify(kind, st, pid, url, it):
         if not qty:
             return UNKNOWN, None, "product page: no stock count"
         return (IN_STOCK if int(qty.group(1)) > 0 else OUT_OF_STOCK), price, f"product page: {qty.group(1)} in stock"
-    if kind in ("jsonld", "prestashop"):
+    if kind in ("jsonld", "prestashop", "takeapp"):
         _, price, avail = jsonld_offer(get_html(url))
         price = float(price) if price else it.get("price")
         if avail in ("PreOrder", "BackOrder"):
@@ -806,6 +806,76 @@ def scan_prestashop(store, base):
         raise ValueError(f"{store}: category pages list no Pokemon products (layout changed or blocked)")
     return out
 
+# take.app WhatsApp storefronts (SATC Gaming, Cape Town). No API: the sitemap lists every product page and each
+# category; product pages carry schema.org JSON-LD (price, availability, category breadcrumb). A category page
+# shows only its first 20 cards (the rest load by script), so full scans read product pages and fast checks
+# read the Pokemon category page.
+TAKEAPP_MAP = {}
+TAKEAPP_CARD = re.compile(r'<a [^>]*href="[^"]*/p/([a-z0-9]{16,})"[^>]*>(.*?)</a>', re.S)
+
+def takeapp_map(st):
+    """(product page URLs, Pokemon category URLs) from the sitemap, refreshed every 15 minutes."""
+    name, root = st["name"], st["url"].rstrip("/")
+    c = TAKEAPP_MAP.get(name)
+    if c and time.time() - c[0] < 900:
+        return c[1], c[2]
+    locs = [html.unescape(u.strip()) for u in re.findall(r"<loc>([^<]+)</loc>", get_html(root + "/sitemap.xml"))]
+    pages = [u for u in locs if re.search(r"/p/[a-z0-9]{16,}$", u)]
+    cats = [u for u in locs if re.search(r"/c/[a-z0-9]{16,}$", u)]
+    if not pages:
+        raise ValueError(f"{name}: sitemap lists no product pages (layout changed or blocked)")
+    poke = [u for u in cats if re.search(r"<title>\s*pok[eé]mon", get_html(u), re.I)]
+    TAKEAPP_MAP[name] = (time.time(), pages, poke)
+    return pages, poke
+
+def takeapp_title(title, category):
+    if re.search(r"pok[eé]mon", category, re.I) and not re.search(r"pok[eé]mon", title, re.I):
+        return "Pokemon TCG: " + title  # the shop's Pokemon category; its titles drop the game name
+    return title
+
+def takeapp_product(store, url):
+    page = get_html(url)
+    title, price, avail = jsonld_offer(page)
+    crumbs = re.findall(r'"@type":"ListItem","position":2,"name":"([^"]*)"', page)
+    it = item(store, url.rsplit("/", 1)[-1], takeapp_title(title, crumbs[0] if crumbs else ""), url, price,
+              avail in ("InStock", "LimitedAvailability", "PreOrder", "BackOrder"))
+    return it
+
+def scan_takeapp(store, base):
+    st = STORE_BY_NAME.get(store) or {"name": store, "url": base}
+    pages, _ = takeapp_map(st)
+    out = []
+    for u in pages:
+        check_deadline()
+        try:
+            it = takeapp_product(store, u)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):  # removed since the sitemap was written
+                continue
+            raise
+        if is_tcg(it["title"]):
+            out.append(it)
+        time.sleep(1)
+    if not out:
+        raise ValueError(f"{store}: product pages show no Pokemon products (layout changed or blocked)")
+    return out
+
+def takeapp_cards(store, base, page):
+    """Cards on a category page: title, price ("R 1 349,00"), and the 'Sold out' badge."""
+    root = base.rstrip("/")
+    out = []
+    for pid, card in TAKEAPP_CARD.findall(page):
+        t = re.search(r"<p[^>]*>([^<]+)</p>", card)
+        pr = re.search(r">R\s?([\d\s ]+(?:,\d\d)?)</p>", card)
+        if not t:
+            continue
+        price = float(re.sub(r"[\s ]", "", pr.group(1)).replace(",", ".")) if pr else None
+        it = item(store, pid, takeapp_title(html.unescape(t.group(1)).strip(), "pokemon"), f"{root}/p/{pid}",
+                  price, price is not None and "Sold out" not in card)
+        if is_tcg(it["title"]):
+            out.append(it)
+    return out
+
 # Custom-built shops with no search API (Oasis Gaming, Multi-Verse): robots.txt allows the sitemap and product
 # pages, and each product page states price and availability in schema.org JSON-LD, so that is what is read.
 JSONLD_FAST_LABELS = ("30TH ANNIVERSARY", "DELTA REIGN", "SPC/UPC")
@@ -974,7 +1044,8 @@ def scan_amazon(store, base):
 
 SCANNERS = {"shopify": scan_shopify, "woo": scan_woo, "checkers": scan_checkers,
             "takealot": scan_takealot, "magento": scan_magento, "mithril": scan_mithril, "eden": scan_eden,
-            "amazon": scan_amazon, "jsonld": scan_jsonld, "prestashop": scan_prestashop}
+            "amazon": scan_amazon, "jsonld": scan_jsonld, "prestashop": scan_prestashop,
+            "takeapp": scan_takeapp}
 
 # ---------------------------------------------------------------- notify
 
@@ -1410,6 +1481,9 @@ def fast_fetch(st):
         return []
     elif kind == "prestashop":
         return scan_prestashop(name, base)  # one category read lists every sealed line with its stock
+    elif kind == "takeapp":
+        _, cats = takeapp_map(st)  # the Pokemon category page: its newest 20 lines with stock and price
+        return [it for u in cats for it in takeapp_cards(name, base, get_html(u))]
     elif kind == "checkers":
         # no search without a login: one 30th product page per beat, in turn
         pages = [u for u, t in checkers_urls(base) if anniversary(t) == "30TH ANNIVERSARY"]
@@ -1453,7 +1527,7 @@ def fast_loop(state, stop):
     cfg = CONFIG["fast_30th"]
     base_wait = cfg["seconds"]
     stores = [st for st in active_stores() if mine(st["name"])
-              and st["type"] in ("shopify", "woo", "takealot", "checkers", "amazon", "jsonld", "prestashop")
+              and st["type"] in ("shopify", "woo", "takealot", "checkers", "amazon", "jsonld", "prestashop", "takeapp")
               and st["name"] not in cfg.get("skip", [])]
     known = known_stores(state)
     # cloud: reading a whole 30th collection is a much bigger request than a search; every 5 s from

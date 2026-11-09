@@ -441,6 +441,29 @@ class JsonLdShops(unittest.TestCase):
         self.assertFalse(got["AF|3"][0])
         self.assertEqual(monitor.anniversary(got["AF|1"][2]), "30TH ANNIVERSARY")
 
+    def test_takeapp_cards(self):
+        """SATC Gaming (take.app): 'Sold out' badge, 'R 1 349,00' prices, game name added to titles."""
+        card = ('<a class="x" href="https://take.app/satc/p/cmt4fw570000d0ai7kbmlh5yg"><div><p class="t">{t}</p>'
+                '<p>blurb</p>{sold}<div><p>R 1 349,00</p></div></div></a>')
+        page = (card.format(t="Mega Evolution Delta Reign ETB", sold="<p>Sold out</p>")
+                + card.format(t="30th Celebration Elite Trainer Box", sold="").replace("cmt4fw57", "cmt4aaaa"))
+        got = monitor.takeapp_cards("SG", "https://sg", page)
+        self.assertEqual([(i["title"], i["price"], i["in_stock"], i["url"]) for i in got], [
+            ("Pokemon TCG: Mega Evolution Delta Reign ETB", 1349.0, False, "https://sg/p/cmt4fw570000d0ai7kbmlh5yg"),
+            ("Pokemon TCG: 30th Celebration Elite Trainer Box", 1349.0, True, "https://sg/p/cmt4aaaa0000d0ai7kbmlh5yg")])
+        self.assertEqual(monitor.anniversary(got[0]["title"]), "DELTA REIGN")
+
+    def test_takeapp_product_page(self):
+        g = [{"@type": "Product", "name": "Mega Evolution Delta Reign ETB", "offers": {"@type": "Offer",
+              "price": 1349, "availability": "https://schema.org/InStock"}},
+             {"@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "SATC"},
+              {"@type": "ListItem", "position": 2, "name": "Pokemon ", "item": "https://sg/c/x"}]}]
+        page = "".join('<script type="application/ld+json">' + json.dumps(d, separators=(",", ":")) + "</script>" for d in g)
+        with mock.patch.object(monitor, "get_html", return_value=page):
+            it = monitor.takeapp_product("SG", "https://sg/p/abc")
+        self.assertEqual((it["key"], it["title"], it["price"], it["in_stock"]),
+                         ("SG|abc", "Pokemon TCG: Mega Evolution Delta Reign ETB", 1349.0, True))
+
     def test_php_slug_sitemap(self):
         """House of TCG: sitemap at /home/sitemap.php, products at product.php?slug=..."""
         sm = """<loc>https://h/home/pages/product.php?slug=pok-mon-mega-evolution-delta-reign-elite-trainer-box</loc>
