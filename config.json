@@ -530,7 +530,8 @@
       "super premium"
     ],
     "workers": 12,
-    "collection_pause_seconds": 180
+    "collection_pause_seconds": 180,
+    "checkers_priority_labels": ["DELTA REIGN"]
   },
   "full_scan_seconds": 300,
   "probe_local_only": false,

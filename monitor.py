@@ -1403,7 +1403,6 @@ def watch_loop(state, until):
 # Gideon, 2026-10-09: English 30th listings checked every 5-10 s. One request per shop returns all of
 # its 30th listings with live stock, so 16 shops cost ~3 requests a second, not one per listing.
 # A hit is re-checked on the product's own page before any alert, so a stale search can't alert.
-CHECKERS_TURN = [-1]
 AMAZON_TURN = [-1]
 
 FAST_TERM = {}  # store -> index of the search term used on its last fast check
@@ -1485,11 +1484,18 @@ def fast_fetch(st):
         _, cats = takeapp_map(st)  # the Pokemon category page: its newest 20 lines with stock and price
         return [it for u in cats for it in takeapp_cards(name, base, get_html(u))]
     elif kind == "checkers":
-        # no search without a login: one 30th product page per beat, in turn
-        pages = [u for u, t in checkers_urls(base) if anniversary(t) == "30TH ANNIVERSARY"]
-        if pages:
-            CHECKERS_TURN[0] = (CHECKERS_TURN[0] + 1) % len(pages)
-            out.append(checkers_product(name, pages[CHECKERS_TURN[0]]))
+        # no search without a login: one product page per beat. Lines in config `checkers_priority_labels`
+        # (Gideon 2026-11-10: Delta Reign ETB listed, drop expected) get every other beat; 30th pages
+        # share the rest, in turn. Same request rate as before.
+        urls = checkers_urls(base)
+        prio_labels = set(CONFIG["fast_30th"].get("checkers_priority_labels") or [])
+        prio = [u for u, t in urls if anniversary(t) in prio_labels]
+        pages = [u for u, t in urls if anniversary(t) == "30TH ANNIVERSARY" and u not in prio]
+        FAST_FLIP[name] = use_prio = bool(prio) and (not pages or not FAST_FLIP.get(name, False))
+        pool, slot = (prio, "prio") if use_prio else (pages, "30th")
+        if pool:
+            COLLECTION_TURN[f"{name}|{slot}"] = (COLLECTION_TURN.get(f"{name}|{slot}", -1) + 1) % len(pool)
+            out.append(checkers_product(name, pool[COLLECTION_TURN[f"{name}|{slot}"]]))
         return out  # rand prices already
     elif kind == "amazon":
         # one wanted product page per beat, in turn: each is read every ~rotation_seconds x products
