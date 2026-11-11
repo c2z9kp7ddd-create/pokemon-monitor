@@ -513,13 +513,29 @@ def item(store, pid, title, url, price, in_stock):
             "price": round(float(price), 2) if price not in (None, "") else None,
             "in_stock": bool(in_stock)}
 
+def shopify_context(p):
+    """Shopify vendor, product type and tags: some shops leave "Pokemon" out of titles
+    ("Perfect Order - Elite Trainer Box") but tag the product "Pokemon"."""
+    tags = p.get("tags") or []
+    if isinstance(tags, str):
+        tags = tags.split(",")
+    return " ".join([p.get("vendor") or "", p.get("product_type") or p.get("type") or ""] + [str(t) for t in tags])
+
+def shopify_title(p):
+    """The title, with "Pokemon " put in front when only the tags/vendor say Pokemon, so every later
+    title-only check (consider, current) sees the same product the scan did."""
+    t = p["title"]
+    if not is_tcg(t) and has_any(norm(shopify_context(p)), ["pokemon"]) and is_tcg(t, "pokemon"):
+        return "Pokemon " + t
+    return t
+
 def shopify_item(store, base, p):
     """A Shopify product -> item. Price is that of the cheapest variant that can be bought (falling back to the
     cheapest variant), so the price shown always belongs to a variant whose stock it reports."""
     vs = p.get("variants") or [{}]
     avail = [v for v in vs if v.get("available")]
     pick = min(avail or vs, key=lambda v: float(v.get("price") or 0) or float("inf"))
-    return item(store, p["id"], p["title"], f"{base}/products/{p['handle']}", pick.get("price"), bool(avail))
+    return item(store, p["id"], shopify_title(p), f"{base}/products/{p['handle']}", pick.get("price"), bool(avail))
 
 def scan_shopify(store, base, max_pages=40):
     # Shopify throttles GitHub's shared IPs on whole-catalogue paging; targeted searches pass. Shops another
@@ -545,10 +561,10 @@ def scan_shopify_light(store, base):
         with SHOPIFY_GATE:
             d = get_json(url, tries=1, timeout=15)
         for p in d["resources"]["results"]["products"]:
-            if p["id"] in seen or not is_tcg(p["title"], p.get("vendor", "")):
+            if p["id"] in seen or not is_tcg(p["title"], shopify_context(p)):
                 continue
             seen.add(p["id"])
-            out.append(item(store, p["id"], p["title"], f"{root}/products/{p['handle']}",
+            out.append(item(store, p["id"], shopify_title(p), f"{root}/products/{p['handle']}",
                             p.get("price"), p.get("available")))
         time.sleep(0.5)
     return out
@@ -562,7 +578,7 @@ def _scan_shopify(store, base, max_pages):
         d = get_json(f"{base}/products.json?limit=250&page={page}")
         prods = d.get("products", [])
         for p in prods:
-            if not is_tcg(p["title"], f'{p.get("vendor", "")} {p.get("product_type", "")}'):
+            if not is_tcg(p["title"], shopify_context(p)):
                 continue
             out.append(shopify_item(store, base, p))
         if len(prods) < 250:
@@ -1232,7 +1248,7 @@ def quick_fetch(st):
         prods = get_json(f"{base}/products.json?limit={250 if '/collections/' in base else 50}", tries=1).get("products", [])
         out = []
         for p in prods:
-            if is_tcg(p["title"], f'{p.get("vendor", "")} {p.get("product_type", "")}'):
+            if is_tcg(p["title"], shopify_context(p)):
                 out.append(shopify_item(name, base, p))
         return out
     if kind == "woo":

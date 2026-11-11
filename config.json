@@ -425,6 +425,14 @@
       "watch_every_seconds": 600
     },
     {
+      "name": "Magic and Monsters",
+      "type": "shopify",
+      "url": "https://magicandmonsters.co.za",
+      "fast_seconds": 30,
+      "scan_every_minutes": 15,
+      "watch_every_seconds": 600
+    },
+    {
       "name": "Pandemonium Games",
       "type": "shopify",
       "url": "https://www.pandemoniumgames.co.za"
@@ -471,6 +479,7 @@
     "House of TCG",
     "A.I. Fest",
     "SATC Gaming",
+    "Magic and Monsters",
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
@@ -684,6 +693,7 @@
     "House of TCG",
     "A.I. Fest",
     "SATC Gaming",
+    "Magic and Monsters",
     "Nintendo Store SA",
     "Oasis Gaming",
     "Otaku Kulture",
