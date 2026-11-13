@@ -23,7 +23,8 @@ class Targets(unittest.TestCase):
                   "Pokemon: Mega Evolution—Delta Reign Booster Box",     # em dash glued the words
                   "Delta Reign Booster Display (36 packs)",
                   "Pokemon TCG: Mega Evolution - Delta Reign Pokemon Center Elite Trainer Box",
-                  "Pokemon: Delta Reign Booster Box Case"]:
+                  "Pokemon: Delta Reign Booster Box Case",
+                  "New Release! Pokémon TCG: Delta Reign - Booster Retail Display (36 sealed boosters)"]:  # Deviant South
             self.check(t, "DELTA REIGN")
         for t in ["Pokemon TCG: Delta Reign - 3-Pack blister (Pre-Order)",
                   "Pokemon TCG: Delta Reign - Premium Blister",
@@ -31,7 +32,8 @@ class Targets(unittest.TestCase):
                   "Pokemon-TCG Mega Evolution Delta Reign Booster *Pre-Order*",
                   "Pre-Order: Pokemon TCG: Mega Evolution - Delta Reign Premium Checklane",
                   "Pokemon TCG: Mega Evolution - Delta Reign Booster Bundle",
-                  "Pokemon TCG: Mega Evolution - Delta Reign Build & Battle Box"]:
+                  "Pokemon TCG: Mega Evolution - Delta Reign Build & Battle Box",
+                  "New Release! Pokémon TCG: Delta Reign - Sleeved Booster (144 sleeved boosters)"]:
             self.check(t, None)
 
     def test_generic_boxes_and_etbs(self):

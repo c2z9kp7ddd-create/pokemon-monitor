@@ -13,7 +13,8 @@ import html
 import re
 import unicodedata
 
-BOX_OR_ETB = re.compile(r"\belite trainer\b|\betb\b|\bbooster box\b|\bbooster display\b|\b36[- ]?packs?\b", re.I)
+# "Booster Retail Display (36 sealed boosters)": Deviant South's booster box title
+BOX_OR_ETB = re.compile(r"\belite trainer\b|\betb\b|\bbooster box\b|\bbooster (retail )?display\b|\b36[- ]?(sealed )?(packs?|boosters)\b", re.I)
 
 # (label, pattern, price test, also required). First match wins, so specific targets come first.
 TARGETS = [
@@ -21,7 +22,7 @@ TARGETS = [
     # Gideon 2026-10-27: SPCs/UPCs of any set, at SA retail or below collector value (a Delta Reign UPC counts)
     ("SPC/UPC", re.compile(r"\bsuper[- ]?premium\b|\bultra[- ]?premium\b|\bupc\b|\bspc\b", re.I), "retail_or_collector", None),
     ("DELTA REIGN", re.compile(r"\bdelta reign\b", re.I), "retail_or_collector", BOX_OR_ETB),
-    ("BOOSTER BOX", re.compile(r"\bbooster box\b|\bbooster display\b|\b36[- ]?packs?\b", re.I), "collector", None),
+    ("BOOSTER BOX", re.compile(r"\bbooster box\b|\bbooster (retail )?display\b|\b36[- ]?(sealed )?(packs?|boosters)\b", re.I), "collector", None),
     ("ETB", re.compile(r"\belite trainer\b|\betb\b", re.I), "collector", None),
 ]
 PRICE_TEST = {label: test for label, _, test, _ in TARGETS}
